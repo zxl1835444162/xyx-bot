@@ -632,8 +632,14 @@ def _fill_first(page: Page, selectors, text: str, label: str = "") -> bool:
 def _stale_result_present(page: Page) -> bool:
     """★ 弹窗里是否残留着**上一轮的结果页**。
 
-    判据：同一个弹窗里同时有「重新生成」和「采纳使用」按钮
+    判据：**任一** modal 里同时有「重新生成」和「采纳使用」按钮
     （这正是 `gen_finished` 的完成标志）。
+
+    ★★ 修正（2026-10-05）：原来只看 `.n-modal.first`。但续写弹窗未必是
+      页面上**第一个** modal —— 审稿抽屉、模型选择弹窗等都是 `.n-modal`，
+      若它们排在前面，就会**检查错对象**（把非续写弹窗当结果页/反之），
+      导致残留检测失效 —— 这正是「下一章必报错」的可能成因。
+      改为**遍历所有 modal**，任一命中即算残留。
 
     ★★ 为什么必须单独判这个（2026-10-04 用户报障）：
       批量跑章时，每章开头会点「AI续写正文」开新弹窗。但**如果上一章的
@@ -649,12 +655,20 @@ def _stale_result_present(page: Page) -> bool:
       且字数为**完全相同**的 **2744**。这不是"生成快"，是**读到了残留值**。
     """
     try:
-        modal = page.locator(".n-modal").first
-        if not modal.count():
-            return False
-        has_regen = bool(modal.locator("button:has-text('重新生成')").count())
-        has_accept = bool(modal.locator("button:has-text('采纳使用')").count())
-        return has_regen and has_accept
+        modals = page.locator(".n-modal")
+        n = modals.count()
+        for i in range(min(n, 6)):
+            m = modals.nth(i)
+            try:
+                if not m.is_visible():
+                    continue
+                has_regen = bool(m.locator("button:has-text('重新生成')").count())
+                has_accept = bool(m.locator("button:has-text('采纳使用')").count())
+                if has_regen and has_accept:
+                    return True
+            except Exception:
+                continue
+        return False
     except Exception:
         return False
 
@@ -664,22 +678,45 @@ def _close_stale_result(page: Page) -> bool:
 
     优先点右上角关闭 / 取消；都没有就按 ESC。
 
+    ★★ 修正（2026-10-05）：原来只操作 `.n-modal.first`，可能关错弹窗
+      （页面上其它 modal 排在前）。现在**优先定位含「采纳使用」的那个 modal**，
+      只关它；找不到才退回第一个 modal。
+
     Returns: 是否执行了关闭动作
     """
     print("[ai] ⚠ 发现上一轮的结果页还开着 → 先关掉，避免读到旧字数")
     closed = False
-    modal = page.locator(".n-modal").first
-    for sel in ("button[aria-label='close']", ".n-base-close",
-                "button:has-text('取消')", "button:has-text('关闭')"):
-        try:
-            b = modal.locator(sel).first
-            if b.count() and b.is_visible(timeout=300):
-                b.click(timeout=2000)
-                closed = True
-                print(f"[ai]   ✓ 已点关闭({sel})")
-                break
-        except Exception:
-            continue
+    target = None
+    try:
+        modals = page.locator(".n-modal")
+        n = modals.count()
+        for i in range(min(n, 6)):
+            m = modals.nth(i)
+            try:
+                if not m.is_visible():
+                    continue
+                if m.locator("button:has-text('采纳使用')").count():
+                    target = m
+                    break
+            except Exception:
+                continue
+        if target is None and n:
+            target = modals.first
+    except Exception:
+        target = None
+
+    if target is not None:
+        for sel in ("button[aria-label='close']", ".n-base-close",
+                    "button:has-text('取消')", "button:has-text('关闭')"):
+            try:
+                b = target.locator(sel).first
+                if b.count() and b.is_visible(timeout=300):
+                    b.click(timeout=2000)
+                    closed = True
+                    print(f"[ai]   ✓ 已点关闭({sel})")
+                    break
+            except Exception:
+                continue
     if not closed:
         try:
             page.keyboard.press("Escape")
@@ -1884,15 +1921,38 @@ def gen_finished(page: Page) -> bool:
     ★ 权威判据：「重新生成」按钮出现。
       生成中完全没有这个按钮（只有「停止生成」），完成后才出现。
       这比『字数稳定』可靠得多 —— 字数稳定在生成停顿的瞬间会误判。
+
+    ★★ 修正（2026-10-05）：原来只查 `.n-modal.first`。但页面上可能有多个
+      modal（审稿抽屉、模型选择弹窗等），续写结果弹窗未必排第一。改为
+      **遍历所有可见 modal**，任一含「重新生成」+「采纳使用」即算完成。
     """
     try:
-        modal = page.locator(".n-modal").first
-        if not modal.count():
-            modal = page.locator(".n-card").first
-        if not modal.count():
-            return False
-        return bool(modal.locator("button:has-text('重新生成')").count()
-                    and modal.locator("button:has-text('采纳使用')").count())
+        modals = page.locator(".n-modal")
+        n = modals.count()
+        for i in range(min(n, 6)):
+            m = modals.nth(i)
+            try:
+                if not m.is_visible():
+                    continue
+                if (m.locator("button:has-text('重新生成')").count()
+                        and m.locator("button:has-text('采纳使用')").count()):
+                    return True
+            except Exception:
+                continue
+        # 兜底：没有 .n-modal 时看 .n-card
+        cards = page.locator(".n-card")
+        cn = cards.count()
+        for i in range(min(cn, 4)):
+            c = cards.nth(i)
+            try:
+                if not c.is_visible():
+                    continue
+                if (c.locator("button:has-text('重新生成')").count()
+                        and c.locator("button:has-text('采纳使用')").count()):
+                    return True
+            except Exception:
+                continue
+        return False
     except Exception:
         return False
 
@@ -2001,6 +2061,11 @@ def wait_generation(page: Page, timeout: float = 240.0,
         return False
 
     # ★ 等字数渲染出来（原来固定 sleep 1.2s）
+    #   ★★ 诊断（2026-10-05）：把「为什么算完成」和读到的字数都打出来，
+    #      方便定位「还没生成就有字数/已满足」这类报告。
+    _why = ("a:期间看到生成中" if started_ok[0]
+            else ("b:进入时弹窗干净" if not _stale_at_entry else "?"))
+    print(f"[ai]   [diag] 判完成依据 = {_why}，进入时残留={_stale_at_entry}")
     cnt = -1
     if wait_until(lambda: get_gen_word_count(page) > 0,
                   timeout=2.0, interval=0.1, desc="字数渲染").ok:
@@ -2336,30 +2401,59 @@ REVIEW_PANE_SEL_DEFINED = True  # （锚点常量已上移到文件头部）
 
 
 def open_review_pane(page: Page, wait: float = 0.6,
-                     max_try: int = 4) -> bool:
+                     max_try: int = 4,
+                     expect_body: str = "") -> bool:
     """点顶部「AI审稿」，等右侧抽屉面板出现。
 
     ★ 实测坑：跟续写一样，打开作品后常有干扰弹窗
       （「是否默认打开上次章节？」「国庆特惠」通知）挡住工具栏，
       导致点击超时或点了没反应。
 
-    ★ 面板已开就直接复用（不重复点）。
-      ★ 曾担心"面板开着换章会滞留上一章正文"，真机实测评测**证伪**：
-        真实链路是「换章 → 开续写 → 关续写 → 点审稿」，
-        此时抽屉必是首次打开，站点会正常灌入当前章正文。
-        （探针实测：第3章流程→框内第3章、第1章流程→框内第1章，均正确。）
-        所以**不加"先关后开"的刷新逻辑** —— 保持简单。
+    ★★ 面板已开时**要不要先关后开**（2026-10-05 用户报障坐实）：
+      ★★★ 先前的"证伪"结论是**错的**，现按用户反馈纠正：
 
-    ★ 策略（重要）：**重试 + 柔性**
-      - 每次先「清干扰」（有则关、没有就跳过，绝不阻塞）
-      - 点击后轮询等面板；没出来就再来一轮
-      - 全程不抛异常
+      用户原话：「审稿的时候，如果不刷新审稿，他是原来的内容」。
+
+      真机探针 `_probe_refresh.py` 实测（**抽屉一直开着**，换章）：
+        [A] 第1章，抽屉已开：框内 84 字（第1章）
+        [B] 不关抽屉切第2章 → 等 0/0.5/1.5/3.0s：框内仍是 84 字（第1章）
+        [C] 不关抽屉切第3章 → 框内仍是 84 字（第1章）
+        [D] 关掉抽屉→重开 → 框内 123 字（第3章，正确刷新）
+      ⇒ **抽屉不关就换章，站点不会重灌「待审文本」，一直是旧章内容。**
+
+      我之前之所以误判成"不存在"，是因为复刻流程时**自己把抽屉关了**，
+      而真实场景里抽屉**一直开着** —— 差异就在这一步。
+
+      ⇒ 所以：面板已开时**必须校验框内是不是当前章正文**；不是就
+        「关掉 → 重开」，强制站点重灌。校验靠 `expect_body`（当前编辑器正文）。
 
     Args:
-        wait:    点击后等待秒数
-        max_try: 最多尝试几次
+        wait:        点击后等待秒数
+        max_try:     最多尝试几次
+        expect_body: ★ 期望框内应有的正文（一般是 `get_body_text(page)`）。
+                     给了就校验；不符则关抽屉重开。留空则退化为旧行为。
     """
     print("[ai] --- 打开「AI审稿」面板 ---")
+
+    # ★★ 面板已开：先看框里是不是**当前章**的正文
+    #    （抽屉开着换章不会刷新 —— 用户报障 + 探针坐实）
+    if review_pane_open(page):
+        if not expect_body:
+            print("[ai] ✓ 审稿面板已在")
+            return True
+        cur = strip_review_wrapper(read_review_box(page))
+        if _same_body(cur, expect_body):
+            print(f"[ai] ✓ 审稿面板已在，且框内正文与当前章一致"
+                  f"（{len(cur)} 字）")
+            return True
+        # 内容对不上 → 关掉重开，强制站点重灌当前章正文
+        print("[ai] ⚠ 审稿抽屉开着但框内正文不是当前章"
+              f"（框内 {len(cur)} 字 / 当前章 {len(expect_body)} 字）"
+              f"→ 关掉重开以刷新")
+        try:
+            close_review_pane(page, wait=1.0)
+        except Exception:
+            pass
 
     for attempt in range(1, max_try + 1):
         # ① 清干扰（有则关、没则跳过）
@@ -2540,6 +2634,35 @@ def strip_review_wrapper(text: str) -> str:
     # 取**最后**一条分隔线之后的内容
     body = text.rsplit(REVIEW_SEP, 1)[-1]
     return body.strip()
+
+
+def _same_body(a: str, b: str, tol: float = 0.02) -> bool:
+    """两份正文是否「基本是同一段」（用于校验抽屉里装的是不是当前章）。
+
+    ★ 为什么不能直接 `==`：站点会做**换行归一化**
+      （实测：待审框 827 字 vs 编辑器 854 字，同一章却差 27 字），
+      所以用「长度接近 + 前缀/中段采样相似」来判断。
+
+    判据（任一成立即算同一段）：
+      · 一方为空 → False（空的不算"一致"）
+      · 长度差异 ≤ max(12, tol·len) 且 前 60 字相同
+      · 前 60 字相同 且 后 60 字相同（长度差异放宽到 10%）
+    """
+    a = (a or "").strip()
+    b = (b or "").strip()
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    la, lb = len(a), len(b)
+    head_same = a[:60] == b[:60]
+    tail_same = a[-60:] == b[-60:]
+    tol_n = max(12, int(max(la, lb) * tol))
+    if head_same and abs(la - lb) <= tol_n:
+        return True
+    if head_same and tail_same and abs(la - lb) <= max(la, lb) * 0.10:
+        return True
+    return False
 
 
 def read_review_body(page: Page) -> str:
@@ -3538,6 +3661,42 @@ def ai_continue(page: Page,
     if not open_continue_dialog(page, wait=wait_dialog):
         return False
 
+    # ⓪-0 ★★ 弹窗洁净度校验（2026-10-05 新增，定位用户报「下一章点续写就报错」）
+    #   用户原话：「生成某一章没事，下一章一点『AI续写正文』就出错，
+    #             提到『字数』『已满足』之类」+「停留在续写界面」。
+    #
+    #   机理：若打开后的弹窗其实是**上一轮的结果页**（带「重新生成」按钮），
+    #     那么 `start_generate` 点「开始 AI 续写」会点在旧页面上（或压根没有
+    #     这个按钮）→ `wait_generation` 第一次轮询就看到「重新生成」→
+    #     **立刻判"已完成"** → `get_gen_word_count` 读到**旧字数**（正是上一章
+    #     那个 2100~2300 的数）→ 打印「N 字在区间内 → 采纳使用」→
+    #     可页面上根本没有可点的「采纳使用」→ 「点『采纳使用』失败」。
+    #   表现就完全对上了：「还没生成就有字数限制」「停留在这个界面」。
+    #
+    #   加固：开完弹窗立刻确认是**初始态**（既没在生成、也没有完成态按钮）。
+    #     发现残留 → 关掉重开一次；仍残留则明确报错，不再带病往下走。
+    _fresh = (not gen_finished(page)) and (not gen_in_progress(page))
+    if not _fresh:
+        print("[ai] ⚠ 打开的续写弹窗不是初始态"
+              f"（完成态={gen_finished(page)} 生成中={gen_in_progress(page)}）"
+              "→ 判定为上一轮残留，关掉重开")
+        _close_stale_result(page)
+        try:
+            close_continue_dialog(page)
+        except Exception:
+            pass
+        if not open_continue_dialog(page, wait=wait_dialog):
+            print("[ai] ✗ 重开续写弹窗失败")
+            return False
+        if gen_finished(page):
+            print("[ai] ✗ 续写弹窗仍停在上一轮的结果页"
+                  "（可能站点改版或关闭按钮失效）→ 终止，避免把旧字数当本轮结果")
+            _shot(page, "ai_continue_stale_dialog")
+            return False
+        print("[ai] ✓ 续写弹窗已刷新为初始态")
+    else:
+        print("[ai] ✓ 续写弹窗为初始态（干净的新弹窗）")
+
     # ⓪ ★ 选快捷选项（提示词）—— 必须在填剧情之前，
     #    因为换提示词可能会重置「续写要求」框里的内容
     if shortcut and shortcut != "跳过":
@@ -3681,13 +3840,21 @@ def ai_review(page: Page,
         print(f"[ai] 正文已就绪（{len(get_body_text(page))} 字），跳过打开章节")
 
     # ① 打开审稿面板（右侧抽屉）
-    #    ★ 实测（2026-10-04，复刻用户真实流程）：真实链路是
-    #      「换章 → 开续写 → 关续写 → 点审稿」，此时抽屉必是**首次打开**，
-    #      站点会正常把当前章正文灌进「待审文本」框。
-    #      （曾怀疑"面板开着换章会滞留上一章"，实测证伪：
-    #        第3章流程→框内第3章、第1章流程→框内第1章，均正确。
-    #        所以不加"先关后开"的复杂逻辑。）
-    if not open_review_pane(page, wait=wait_pane):
+    #    ★★ 修正（2026-10-05）：必须**校验框内是当前章正文**，不符则关掉重开。
+    #      用户报障 + 探针坐实：抽屉**开着**换章时，站点不会重灌「待审文本」，
+    #      框里一直是旧章内容 ⇒ 审错章。
+    #      （我先前误判为"不存在"，是因为复刻流程时自己关了抽屉 —— 见
+    #        `open_review_pane` 的详细说明。）
+    #      一条龙阶段三走到这里时抽屉可能是：
+    #        · 首开（自己关过）→ 站点正常灌当前章 ⇒ 校验通过
+    #        · 仍然开着（用户手动开过 / 上一章残留）→ 校验失败 ⇒ 关掉重开
+    _expect = strip_review_wrapper(get_body_text(page))
+    if _expect:
+        print(f"[ai] 当前章正文 {len(_expect)} 字 → 开抽屉时会校验框内是否一致")
+    else:
+        print("[ai] ⚠ 读不到当前章正文 → 开抽屉时不校验"
+              "（退化为旧行为，站点首开一般会正常灌入）")
+    if not open_review_pane(page, wait=wait_pane, expect_body=_expect):
         return False
 
     # ② 选模型
@@ -4041,6 +4208,29 @@ def ai_auto_chapter(page: Page,
     print("\n" + "-" * 58)
     print("  【阶段一】AI 续写正文")
     print("-" * 58)
+
+    # ★★ 进入续写前的**状态诊断**（2026-10-05 新增，定位「下一章点续写就报错」）
+    #   用户报：「生成某一章没事，下一章一点 AI 续写正文就出错，
+    #            提到'字数'、'已满足'之类」。
+    #   最可疑的路径：上一章的残留弹窗/结果页没清干净 ⇒
+    #     gen_finished 一进来就是 True ⇒ wait_generation 立刻返回
+    #     ⇒ 拿旧字数当本轮结果 ⇒ 去点不存在的「采纳使用」。
+    #   把这几项状态**显式打出来**，下次复现时日志里就有证据。
+    try:
+        _diag_gen_fin = gen_finished(page)
+        _diag_stale = _stale_result_present(page)
+        _diag_dlg = continue_dialog_open(page)
+        _diag_wc = get_gen_word_count(page)
+        print(f"[auto][diag] 进入续写前状态："
+              f"结果页={_diag_gen_fin} 残留={_diag_stale} "
+              f"续写弹窗={_diag_dlg} 读到的字数={_diag_wc} "
+              f"| 区间={min_words}~{max_words} 重试={max_retry}")
+        if _diag_gen_fin or _diag_stale:
+            print("[auto][diag] ⚠ 进入时就有'完成态'元素 —— 疑似上一章残留！"
+                  "若随后出现'字数已满足'请把这几行发我")
+    except Exception as _e:
+        print(f"[auto][diag] 状态诊断失败（忽略）：{_e}")
+
     gen_ok = ai_continue(
         page,
         plot=plot, model=gen_model, associate=gen_associate,
@@ -4297,9 +4487,9 @@ def ai_batch_chapters(page: Page,
                       gen_associate: str = "正常",
                       relate_count: int = 10,
                       shortcut: str = "",
-                      min_words: int = 100,
-                      max_words: int = 5000,
-                      max_retry: int = 0,
+                      min_words: int = 2100,
+                      max_words: int = 2300,
+                      max_retry: int = 5,
                       best_effort: bool = True,
                       gen_timeout: float = 300.0,
                       # ---- 审稿参数 ----
@@ -4377,7 +4567,8 @@ def ai_batch_chapters(page: Page,
     print("=" * 60)
     print(f"  ★★ 批量跑章：第 {start} ~ {end} 章（共 {_total} 章）")
     print(f"     模型={gen_model} 联想={gen_associate} 关联={relate_count}章")
-    print(f"     采纳 {min_words}~{max_words} 字 · 不重试 · 审稿={'是' if do_review else '否'}")
+    print(f"     采纳 {min_words}~{max_words} 字 · 最多重生成 {max_retry} 次"
+          f" · 审稿={'是' if do_review else '否'}")
     print(f"     plot 来源={'指令模板自动渲染(#@=当前章)' if plot_for else ('固定('+str(len(plot))+'字)')}")
     print("=" * 60)
 

@@ -354,8 +354,10 @@ class AiFlowMixin:
         auto_close = bool(self._auto_both_close_var.get())
 
         self.log("★ 一条龙：续写 → 采纳 → 关弹窗 → 审稿 → 替换", "brand")
+        # ★ 修正（2026-10-05）：原来这条日志写死「（不重试）」，
+        #   但实际传下去的是 max_retry（界面上的值），文案与行为不符、会误导。
         self.log(f"  续写：细腻版/正常，字数 {min_words}~{max_words}"
-                 f"（不重试），剧情 {len(plot)} 字", "dim")
+                 f"（最多重生成 {max_retry} 次），剧情 {len(plot)} 字", "dim")
         self.log(f"  审稿：{rv_model}→{rv_card}，要求「{rv_req or '(不改)'}」"
                  + (f"，提示词 {len(rv_instr)} 字" if rv_instr else "")
                  + (f"，先开章节「{rv_chapter}」" if rv_chapter else ""),

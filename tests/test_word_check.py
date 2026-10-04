@@ -382,38 +382,95 @@ check_true("拼接用的分隔线是常量 REVIEW_SEP（不再手写字符串）
            "f\"{REVIEW_SEP}\\n\\n{body}\"" in ai_src or
            "{REVIEW_SEP}\\n\\n{body}" in ai_src)
 
-# ============================================ 7. 换章审稿：实测证伪「滞留上一章」
+# ============================================ 7. 换章审稿：抽屉里必须是当前章正文
 print("\n=== 7. 换章审稿：抽屉里必须是当前章正文 ===")
 
-# ★ 用户提示：「不是，是你换了章，才点审稿的」——提醒我看真实用法。
-#   我曾据此怀疑一个 bug 并加了"面板已开就刷新"的逻辑：
-#     站点**只在抽屉打开的那一刻**灌入当前章正文，换章不会更新
-#     ⇒ 面板开着换章 → 框里滞留上一章 → 审错章
+# ★★ 重要更正（2026-10-05）：这一节原先"证伪"了「抽屉滞留上一章」，
+#   但**那个证伪是错的** —— 用户明确重申：
+#     「审稿的时候，如果不刷新审稿，他是原来的内容」。
 #
-#   ★★ 但复刻用户真实流程后用真机实测**证伪**了：
-#     真实链路是「换章 → 开续写 → 关续写 → 点审稿」
-#     （续写弹窗是居中模态，必须先关，见 continue_to_review 的坑1）
-#     ⇒ 此时抽屉**必是首次打开**，站点会正常灌入当前章正文。
-#     实测：第3章流程→框内第3章、第1章流程→框内第1章，均正确。
+#   我误判的原因：复刻流程时**我自己把抽屉关了**才切章，
+#   而真实场景是**抽屉一直开着**换章。差异就在这一步。
 #
-#   ⇒ 结论：**不存在错章问题**，不该加"先关后开"的刷新逻辑（徒增复杂）。
-#     本节改为**锁定这个结论**，防止后人又被同样的猜测误导、加回无用代码。
+#   真机探针 `_probe_refresh.py` 实测（抽屉不关就换章）：
+#     [A] 第1章，抽屉已开：框内 84 字（第1章）
+#     [B] 不关抽屉切第2章 → 等 0/0.5/1.5/3.0s：框内仍 84 字（第1章）
+#     [C] 不关抽屉切第3章 → 框内仍 84 字（第1章）
+#     [D] 关掉抽屉→重开 → 框内 123 字（第3章，正确刷新）
+#   ⇒ 坐实：**抽屉不关就换章，站点不重灌「待审文本」，一直是旧章内容。**
+#
+#   ⇒ 所以修复是：`open_review_pane` 新增 `expect_body`，
+#     面板已开时校验框内是否当前章正文；不符则「关掉→重开」强制刷新。
+#     本节改为**锁定修复**，防止后人再把这段逻辑删掉。
 
-check_true("open_review_pane 不再有 refresh_body 参数（实测证伪，保持简单）",
-           "refresh_body" not in ai_src,
-           "该参数针对不存在的场景；真实流程抽屉总是首次打开")
-check_true("open_review_pane 不再有 expect_body 参数",
-           "expect_body" not in ai_src)
-check_true("没有『先关后开』的强制刷新分支",
-           "抽屉已开着但需刷新正文" not in ai_src)
-check_true("ai_review 不做正文前缀校验（无此必要）",
-           "当前章正文前缀（用于校验抽屉带入）" not in ai_src)
+check_true("open_review_pane 有 expect_body 参数（校验框内是否当前章）",
+           "expect_body" in ai_src,
+           "抽屉开着换章不会刷新框内容（用户报障 + 探针坐实）")
+check_true("面板已开时会校验框内正文",
+           "_same_body(cur, expect_body)" in ai_src)
+check_true("框内不是当前章 → 关抽屉重开刷新",
+           "关掉重开以刷新" in ai_src)
+check_true("ai_review 调用 open_review_pane 时传 expect_body",
+           "expect_body=_expect" in ai_src)
+# ★ 但**不要**用回旧的 refresh_body（那是被证伪的命名，语义不清晰）
+check_true("没有复活 refresh_body 旧命名",
+           "refresh_body" not in ai_src)
 
-# 但真实的衔接坑必须还在：续写弹窗不自动关，开审稿前要先关
+# 真实的衔接坑必须还在：续写弹窗不自动关，开审稿前要先关
 check_true("close_continue_dialog 仍存在（续写弹窗拦点击）",
            "def close_continue_dialog" in ai_src)
 check_true("continue_to_review 仍会先关续写弹窗再开审稿",
            "close_continue_dialog(page)" in ai_src)
+
+# ---- 纯逻辑：_same_body 判据（站点的换行归一化会让长度略差）----
+def _same_body(a: str, b: str) -> bool:
+    """复刻 open_review_pane 用的 _same_body 判定。"""
+    a = (a or "").strip()
+    b = (b or "").strip()
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    head_same = a[:60] == b[:60]
+    tail_same = a[-60:] == b[-60:]
+    tol_n = max(12, int(max(len(a), len(b)) * 0.02))
+    if head_same and abs(len(a) - len(b)) <= tol_n:
+        return True
+    if head_same and tail_same and abs(len(a) - len(b)) <= max(len(a), len(b)) * 0.10:
+        return True
+    return False
+
+
+_LONG_A = "陆晨站在公寓门口。" * 20      # 180 字
+_LONG_B = "陆晨站在公寓门口。" * 20
+check("完全一致 → 同一段", _same_body(_LONG_A, _LONG_B), True)
+check("长度略差（换行归一化）→ 仍算同一段",
+      _same_body(_LONG_A + "。", _LONG_B), True)
+check("开头就不同 → 不是同一段",
+      _same_body("林深推开窗。" + "x" * 100, _LONG_A), False)
+check("一方为空 → 不是同一段", _same_body("", _LONG_A), False)
+check("两方都空 → 不是同一段", _same_body("", ""), False)
+check("长短差很大 → 不是同一段",
+      _same_body(_LONG_A, _LONG_A + "新增内容" * 40), False)
+
+# ============================================ 7b. 弹窗洁净度（下一章必报错的根因）
+print("\n=== 7b. 续写弹窗洁净度校验（防上一轮结果页残留）===")
+
+# ★ 用户报：「生成某一章没事，下一章一点『AI续写正文』就出错，
+#           提到『字数』『已满足』之类」「停留在续写界面」。
+#   机理：打开的弹窗其实是**上一轮结果页** ⇒ start_generate 没点中
+#   ⇒ wait_generation 第一次轮询就判"已完成" ⇒ 读旧字数（正好在 2100~2300）
+#   ⇒ 打印"在区间内 → 采纳使用" ⇒ 但页面上没有可点的按钮 ⇒ 失败。
+#   （"还没生成就有字数限制" 完全对上。）
+check_true("ai_continue 打开弹窗后校验洁净度",
+           "弹窗洁净度校验" in ai_src)
+check_true("不是初始态会关掉重开",
+           "判定为上一轮残留，关掉重开" in ai_src)
+check_true("重开仍残留则终止（不带病往下走）",
+           "续写弹窗仍停在上一轮的结果页" in ai_src)
+check_true("残留检测遍历所有 modal（不再只看 first）",
+           "遍历所有可见 modal" in ai_src
+           or "任一 modal 里同时有" in ai_src)
 
 # ============================================ 8. 审稿前必须确认"是哪一章"
 print("\n=== 8. 审稿前核对章号（用户问「你知道是哪一章吗？」）===")
