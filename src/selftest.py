@@ -514,6 +514,12 @@ def run_selftest(verbose: bool = True, smoke_ui: bool = False,
         print("=" * 66)
         print(_line("运行方式",
                     "打包版（.app/.exe）" if f["frozen"] else "源码运行"))
+        try:
+            from src import _buildinfo as _B
+
+            print(_line("构建版本", _B.describe()))
+        except Exception:
+            pass
         print(_line("平台/架构", f"{f['platform']} / {f['arch']}"))
         print(_line("系统", f["os_version"]))
         print(_line("Python", f["python"]))

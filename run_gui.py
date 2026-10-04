@@ -65,10 +65,23 @@ def _show_fatal(err: str) -> None:
         if root is None:
             root = tk.Tk()
         root.withdraw()
-        messagebox.showerror("启动失败", err[:2000])
+        # ★ 尽力把弹窗弄到最前面：macOS 上新建的窗口不一定抢到焦点，
+        #   用户可能根本看不到这个错误框（"点了没反应"的另一种成因）。
+        try:
+            root.lift()
+            root.attributes("-topmost", True)
+            root.focus_force()
+        except Exception:
+            pass
+        messagebox.showerror("启动失败",
+                            err[:2000] + "\n\n（完整报告已写到桌面："
+                            "XYXBot-诊断.txt）")
         if own_root:
             root.destroy()
-    except Exception:
+    except Exception as _e:
+        # ★ 连弹窗都失败了 —— 这件事本身也要留痕，否则就成了"什么都没发生"
+        _log_fatal(f"[弹窗失败] {type(_e).__name__}: {_e}\n"
+                   "（上面的报告就是原因；弹窗失败通常是 macOS 权限/焦点问题）")
         try:
             input("启动失败，按回车退出...")
         except Exception:
@@ -76,28 +89,51 @@ def _show_fatal(err: str) -> None:
 
 
 def _log_fatal(err: str) -> None:
-    """把致命错误同时写一份到数据目录，方便事后排查。
+    """把致命错误/卡死报告写到**好找的地方**。
 
-    ★★ 为什么必须写文件（2026-10-04 用户实测：macOS 上"输完密码进不去"）
+    ★★ 为什么必须写文件（2026-10-04 用户实测：macOS 上「输完密码进不去」）
       打包成 .app 之后 `console=False`，**stderr 是断的** ——
       Tk 的 `report_callback_exception` 默认只把堆栈打印到 stderr，
       于是异常在用户那儿表现为"点了没反应、什么都不显示"，
       完全查不出原因。写文件才有据可查。
+
+    ★ 除了数据目录，还额外写一份到**桌面**：让用户一眼就能找到、直接发我。
+      （数据目录藏在 `~/Library/Application Support/...` 里，很多人找不到。）
     """
+    stamp = ""
+    try:
+        from src import _buildinfo as B
+
+        stamp = B.describe() + "\n"
+    except Exception:
+        pass
+    text = stamp + err
+
+    targets = []
     try:
         from src import config as C
 
-        p = C.LOGS / "fatal.log"
-        with open(p, "a", encoding="utf-8") as f:
-            from datetime import datetime
-
-            f.write(f"\n===== {datetime.now():%Y-%m-%d %H:%M:%S} =====\n")
-            f.write(err)
-            if not err.endswith("\n"):
-                f.write("\n")
-        print(f"[fatal] 已写入 {p}", file=sys.stderr)
+        targets.append(C.LOGS / "fatal.log")
     except Exception:
         pass
+    try:
+        targets.append(Path.home() / "Desktop" / "XYXBot-诊断.txt")
+    except Exception:
+        pass
+
+    for p in targets:
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            with open(p, "a", encoding="utf-8") as f:
+                from datetime import datetime
+
+                f.write(f"\n===== {datetime.now():%Y-%m-%d %H:%M:%S} =====\n")
+                f.write(text)
+                if not text.endswith("\n"):
+                    f.write("\n")
+            print(f"[fatal] 已写入 {p}", file=sys.stderr)
+        except Exception:
+            pass
 
 
 def _install_error_handler() -> None:
@@ -266,13 +302,26 @@ def run_app() -> int:
 
 _BEACON = {"label": "进程启动", "t": time.time()}
 _WATCHDOG_ON = False
-_HANG_SECONDS = float(os.getenv("XYX_HANG_SECONDS", "20") or 20)
+_HANG_SECONDS = float(os.getenv("XYX_HANG_SECONDS", "12") or 12)
 
 
 def _beacon(label: str) -> None:
-    """记一次"启动有进展"。"""
+    """记一次"启动有进展"，并**顺手写一行到诊断文件**。
+
+    ★ 为什么要写盘：万一用户在主线程卡死后**强制退出**（转圈时很容易这样做），
+      看门狗可能还没到阈值、什么都没来得及写。有一条进度 trail 就能看出
+      卡在哪一步（"创建登录窗" / "开始创建主界面 MainWindow" / "主界面已创建"）。
+    """
     _BEACON["label"] = label
     _BEACON["t"] = time.time()
+    try:
+        p = Path.home() / "Desktop" / "XYXBot-诊断.txt"
+        with open(p, "a", encoding="utf-8") as f:
+            from datetime import datetime
+
+            f.write(f"[{datetime.now():%H:%M:%S}] 启动进度：{label}\n")
+    except Exception:
+        pass
 
 
 def _arm_watchdog() -> None:
