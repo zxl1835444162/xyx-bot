@@ -73,6 +73,15 @@ jobs:
           python tests/diag_macos_fonts.py
         continue-on-error: true
 
+      - name: "★ 定性：<Configure> → 重绘 是不是无限循环"
+        # 真机上抓到主线程卡在 ui/theme.py:559 create_text（由 <Configure> 触发）。
+        # 这个实验数 <Configure> 触发次数 —— 暴增=无限循环，次数正常=create_text 本身卡。
+        env:
+          XYX_NO_DIALOG: "1"
+          XYX_HANG_SECONDS: "12"
+        run: |
+          python tests/diag_canvas_configure.py || true
+
       - name: "★ 真实驱动一次 login → main（带看门狗，卡住会 dump 栈）"
         env:
           LANG: ${{ matrix.locale }}.UTF-8
