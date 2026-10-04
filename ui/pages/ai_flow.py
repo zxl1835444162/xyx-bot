@@ -282,8 +282,11 @@ class AiFlowMixin:
               ② 正文写入编辑器有延迟，立刻审稿会读到空/旧正文
             串联函数 `AI.ai_auto_chapter()` 把这两步都处理掉了。
 
-        ★ 字数区间故意放宽（默认 100~5000，max_retry=0）：
-            用户要求「让字数限制宽一点，避免重试」，一次过。
+        ★ 字数区间（2026-10-04 修正）：
+            原实现把区间写死成 100~5000 + `max_retry=0`，理由是
+            「让字数限制宽一点，避免重试」。但这等于**字数限制完全失效**
+            （任何字数都算达标），与用户「2700 竟然过了 2100-2300」的
+            报障直接冲突。现在改为**严格使用界面上设置的区间与重试次数**。
         """
         import threading
 
@@ -322,9 +325,16 @@ class AiFlowMixin:
             t = entry.get().strip()
             return int(t) if t.isdigit() else default
 
-        # ★ 宽区间 + 不重试（用户要求「字数限制宽一点，避免重试」）
-        min_words = _int_or(self._ai_min_entry, 100) or 100
-        max_words = _int_or(self._ai_max_entry, 5000) or 5000
+        # ★★ 修正（2026-10-04 用户报「2700 字竟然过了 2100-2300 的限制」）：
+        #    原实现把区间写死成 100~5000（`... , 100) or 100`），
+        #    重试次数更是硬编码 `max_retry=0`，理由写在注释里是
+        #    「让字数限制宽一点，避免重试」。
+        #    但这两条叠加 = **字数限制完全失效**：只生成一轮 + 兜底必采纳
+        #    ⇒ 任何字数都算"达标"。用户就是这样被 2700 字蒙过去的。
+        #    现在：**严格使用界面上的区间与重试次数**。
+        min_words = _int_or(self._ai_min_entry, DEFAULT_MIN_WORDS)
+        max_words = _int_or(self._ai_max_entry, DEFAULT_MAX_WORDS)
+        max_retry = _int_or(self._ai_retry_entry, DEFAULT_MAX_RETRY)
         if min_words > max_words:
             min_words, max_words = max_words, min_words
         gen_timeout = 300.0
@@ -406,7 +416,10 @@ class AiFlowMixin:
                     gen_associate="正常", relate_count=10,
                     shortcut=shortcut,
                     min_words=min_words, max_words=max_words,
-                    max_retry=0, best_effort=True,
+                    # ★★ 修正（2026-10-04）：原来硬编码 `max_retry=0`
+                    #    ⇒ 一章只生成一轮，字数不达标也直接过。
+                    #    改为真正使用界面上的「最多重生成」。
+                    max_retry=max_retry, best_effort=True,
                     gen_timeout=gen_timeout,
                     # 衔接
                     close_dialog=auto_close, settle=2.0,
@@ -519,8 +532,18 @@ class AiFlowMixin:
 
         # ---- 续写 / 审稿参数（复用一条龙的那套）----
         shortcut = self._ai_shortcut_entry.get().strip()
-        min_words = _int_or(self._ai_min_entry, 100) or 100
-        max_words = _int_or(self._ai_max_entry, 5000) or 5000
+
+        # ★★ 修正（2026-10-04 用户报「2700 字竟然过了 2100-2300 的限制」）：
+        #    原实现把区间**写死**成 `_int_or(,_entry, 100) or 100` /
+        #    `... 5000) or 5000` —— 只有当界面上**留空**时才落到 100/5000 兜底，
+        #    但如果界面上填着 2100/2300，这里拿到的本来是 2100/2300 ...
+        #    真正的元凶在下面：`max_retry=0` 硬编码（见调用处），
+        #    导致**一轮定生死**，而旧的"尽力而为"分支会无脑采纳最后一轮。
+        #    现在：区间严格用**界面上的值**（默认走 DEFAULT_*），
+        #    重试次数也真正使用界面上的「最多重生成」。
+        min_words = _int_or(self._ai_min_entry, DEFAULT_MIN_WORDS)
+        max_words = _int_or(self._ai_max_entry, DEFAULT_MAX_WORDS)
+        max_retry = _int_or(self._ai_retry_entry, DEFAULT_MAX_RETRY)
         if min_words > max_words:
             min_words, max_words = max_words, min_words
         rv_model = self._rv_model_entry.get().strip() or DEFAULT_REVIEW_MODEL
@@ -604,7 +627,11 @@ class AiFlowMixin:
                     gen_model="细腻版", gen_associate="正常", relate_count=10,
                     shortcut=shortcut,
                     min_words=min_words, max_words=max_words,
-                    max_retry=0, best_effort=True, gen_timeout=300.0,
+                    # ★★ 修正（2026-10-04）：原来是硬编码 `max_retry=0`
+                    #    ⇒ 一章只生成一轮，字数不达标也直接过
+                    #    ⇒ 用户 2700 字（上限 2300）被当"完成"。
+                    #    改为真正使用界面上的「最多重生成」。
+                    max_retry=max_retry, best_effort=True, gen_timeout=300.0,
                     do_review=True,
                     review_model=rv_model, review_card=rv_card,
                     review_card_hint=AI.MODEL_CARD_HINT.get(rv_card, ""),

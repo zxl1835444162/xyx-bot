@@ -387,9 +387,19 @@ _n_files, _probs = audit_wait_args.audit_all(ROOT)
 check_true(f"全项目 {_n_files} 个文件的 wait_until/wait_gone 谓词签名都正确"
            f"（问题 {_probs[:3]}）", not _probs)
 
-# 这两个具体调用点必须包了 lambda（防回归）
-check_true("wait_generation 用 lambda 包 gen_finished",
-           "lambda: gen_finished(page)" in _func_src("wait_generation"))
+# 这两个具体调用点必须包了 lambda 或等价的无参闭包（防回归）
+#   ★ 2026-10-04 更新：wait_generation 的判据从 `lambda: gen_finished(page)`
+#     升级为 `_finished_and_trustworthy`（内部仍调用 gen_finished，但额外
+#     要求"本轮确实启动过"，防止**残留结果页**被立刻当成已完成、读到旧字数）。
+#     两者都是**零参数**可调用对象，签名正确性一致。
+_wg_src = _func_src("wait_generation")
+check_true("wait_generation 的谓词是零参可调用（lambda 或本地闭包）",
+           ("lambda: gen_finished(page)" in _wg_src
+            or ("def _finished_and_trustworthy()" in _wg_src
+                and "wait_until(_finished_and_trustworthy" in _wg_src)),
+           "必须传零参谓词，否则 wait_until 每轮抛 TypeError → 必然超时")
+check_true("wait_generation 内部仍以 gen_finished 为完成判据",
+           "gen_finished(page)" in _wg_src)
 check_true("open_review_pane 用 lambda 包 review_pane_open",
            "lambda: review_pane_open(page)" in _func_src("open_review_pane"))
 

@@ -597,7 +597,7 @@ def cmd_batch() -> None:
             plot=plot, plot_for=plot_for,
             gen_model="细腻版", gen_associate="正常", relate_count=10,
             min_words=min_words, max_words=max_words,
-            max_retry=0, best_effort=True, gen_timeout=300.0,
+            max_retry=max_retry, best_effort=True, gen_timeout=300.0,
             do_review=not no_review,
             review_model=rv_model, review_card=rv_card,
             review_card_hint=AI.MODEL_CARD_HINT.get(rv_card, ""),

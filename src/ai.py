@@ -629,6 +629,70 @@ def _fill_first(page: Page, selectors, text: str, label: str = "") -> bool:
 
 # ---------------------------------------------------------------- 流程步骤
 
+def _stale_result_present(page: Page) -> bool:
+    """★ 弹窗里是否残留着**上一轮的结果页**。
+
+    判据：同一个弹窗里同时有「重新生成」和「采纳使用」按钮
+    （这正是 `gen_finished` 的完成标志）。
+
+    ★★ 为什么必须单独判这个（2026-10-04 用户报障）：
+      批量跑章时，每章开头会点「AI续写正文」开新弹窗。但**如果上一章的
+      结果弹窗没被关干净**，`open_continue_dialog` 那句
+      「弹窗存在就算成功」会**直接把旧结果页当成新弹窗收下**。
+      后果链条：
+        开弹窗「成功」→ 填剧情/选模型其实作用在旧页面上 →
+        `start_generate` 点到的可能不是「开始AI续写」→
+        `wait_generation` 一上来就看到「重新生成」按钮 → **立刻判"已完成"**
+        → `get_gen_word_count` 读到**上一轮的旧字数**。
+
+      用户日志里的铁证：第37章与第38章耗时仅 **16s / 19s**（正常需 3~5 分钟），
+      且字数为**完全相同**的 **2744**。这不是"生成快"，是**读到了残留值**。
+    """
+    try:
+        modal = page.locator(".n-modal").first
+        if not modal.count():
+            return False
+        has_regen = bool(modal.locator("button:has-text('重新生成')").count())
+        has_accept = bool(modal.locator("button:has-text('采纳使用')").count())
+        return has_regen and has_accept
+    except Exception:
+        return False
+
+
+def _close_stale_result(page: Page) -> bool:
+    """关掉残留的结果弹窗，给新弹窗让路。
+
+    优先点右上角关闭 / 取消；都没有就按 ESC。
+
+    Returns: 是否执行了关闭动作
+    """
+    print("[ai] ⚠ 发现上一轮的结果页还开着 → 先关掉，避免读到旧字数")
+    closed = False
+    modal = page.locator(".n-modal").first
+    for sel in ("button[aria-label='close']", ".n-base-close",
+                "button:has-text('取消')", "button:has-text('关闭')"):
+        try:
+            b = modal.locator(sel).first
+            if b.count() and b.is_visible(timeout=300):
+                b.click(timeout=2000)
+                closed = True
+                print(f"[ai]   ✓ 已点关闭({sel})")
+                break
+        except Exception:
+            continue
+    if not closed:
+        try:
+            page.keyboard.press("Escape")
+            closed = True
+            print("[ai]   ✓ 已按 ESC 关闭")
+        except Exception:
+            pass
+    # 等它真的消失（最多 3s）
+    wait_gone(lambda: _stale_result_present(page), timeout=3.0,
+              interval=0.1, desc="残留结果页关闭")
+    return closed
+
+
 def open_continue_dialog(page: Page, wait: float = 3.0) -> bool:
     """点顶部「AI续写正文」，等弹窗出现。
 
@@ -642,10 +706,19 @@ def open_continue_dialog(page: Page, wait: float = 3.0) -> bool:
        而且**只检查一次**：慢一点就误判失败、白做一轮重试。
        现在改成条件等待，超时反而**更宽容**（`max(wait,3)+2` 秒），
        所以"弹窗慢"的最坏情况不会比旧实现差。
+
+    ★★★ 正确性加固（2026-10-04，用户报「16 秒生成完 / 两章字数一模一样」）：
+       进入本函数时先 `_close_stale_result()` —— 若上一轮结果页还开着，
+       必须先关掉。否则「弹窗存在」这个判据会把**旧结果页**当新弹窗收下，
+       导致后续读到**旧字数**（详见 `_stale_result_present` 的说明）。
     """
     print("[ai] --- 打开「AI续写正文」弹窗 ---")
 
-    # 先清干扰弹窗
+    # ★ 先清掉可能残留的上一轮结果页（否则会被误当成新弹窗）
+    if _stale_result_present(page):
+        _close_stale_result(page)
+
+    # 清干扰弹窗
     n = dismiss_dialogs(page, verbose=True)
     if n:
         print(f"[ai] 清掉了 {n} 个干扰弹窗")
@@ -1851,27 +1924,66 @@ def wait_generation(page: Page, timeout: float = 240.0,
       现在：去掉开头 1.5s（用条件等待覆盖"结果页还没渲染"）；
       `poll` 2.0→0.4（判据只是廉价的 `count()` 查询）；
       完成后改为**等字数真的渲染出来**（最多 2s，拿不到也不阻塞）。
+
+    ★★★ 正确性加固（2026-10-04，用户报「16 秒生成完」）：
+      `gen_finished` 的判据是「『重新生成』按钮出现」。如果调用本函数时
+      **旧结果页还在**（新弹窗没干净打开 / 上一轮没下架），第一次轮询就会
+      **立刻返回"已完成"**，随后 `get_gen_word_count` 读到旧字数 ——
+      表现为「几十秒就跑完一章」+「两章字数完全相同」。
+
+      因此新增 **`require_started`**：必须**先观察到本轮真的在生成**
+      （`gen_in_progress` 为真，或曾观察到结果页消失），才允许接受
+      「已完成」的判定。若整轮都没看到启动迹象，则**拒绝采信**，
+      打印明确告警并返回 False（让上层走失败路径，而不是拿旧字数当战果）。
     """
     print(f"[ai] --- 等待生成完成（最多 {int(timeout)}s）---")
     saw_busy = [False]
     last_beat = [0.0]
     _t0 = time.time()
 
+    # ★ 进入时结果页是否已经"完成态"（用于判断这是不是残留）
+    _stale_at_entry = _stale_result_present(page)
+    if _stale_at_entry:
+        print("[ai] ⚠ 进入等待时结果页就已经是「完成态」"
+              "（可能是上一轮残留）→ 要求先观察到本轮启动才采信")
+    started_ok = [False]     # 是否已确认「本轮真的启动了」
+
     def _tick(_n):
         if gen_in_progress(page):
             saw_busy[0] = True
+            started_ok[0] = True
         el = time.time() - _t0
         if el - last_beat[0] >= 20:
             last_beat[0] = el
             state = "生成中" if gen_in_progress(page) else "等待结果页"
             print(f"[ai]   已等 {int(el)}s …（{state}）")
 
+    def _finished_and_trustworthy() -> bool:
+        """★ 「已完成」+「值得采信」两个条件都满足才算真的完成。
+
+        值得采信 = 满足**任一**：
+          a) 本轮期间观察到过生成中（`gen_in_progress`）—— 最强证据
+          b) 进入时并非"完成态"（即弹窗原本是干净的，那"重新生成"出现
+             只能是本轮生成出来的）
+          c) 完成态出现过又消失、再出现（说明经历了"生成→完成"的完整过程）
+
+        若进入时就已经是完成态、且整轮都没看到任何生成迹象 ⇒ **不采信**，
+        继续等（后面会超时并报错），绝不会把旧字数当本轮结果。
+        """
+        if not gen_finished(page):
+            return False
+        if started_ok[0]:
+            return True          # a
+        if not _stale_at_entry:
+            return True          # b
+        return False             # 残留态且无启动证据 → 不采信
+
     # ★★ 必须是 lambda：`gen_finished` 需要 page 参数。
     #   直接写 `wait_until(gen_finished, ...)` 会**每轮抛 TypeError**，
     #   被 wait_until 当成"未满足"吞掉 → 等待**必然超时**。
     #   实测代价：每章干等满 300 秒才判"生成失败"，而生成其实 ~9 秒就好。
     # ★ should_abort：用户点「停止」时立刻退出，不等满 timeout。
-    res = wait_until(lambda: gen_finished(page),
+    res = wait_until(_finished_and_trustworthy,
                      timeout=timeout, interval=poll,
                      on_poll=_tick, desc="生成完成",
                      should_abort=cancel_requested)
@@ -1879,8 +1991,12 @@ def wait_generation(page: Page, timeout: float = 240.0,
         print("[ai] ⏹ 生成等待被中止（用户停止）")
         return False
     if not res.ok:
-        print(f"[ai] ✗ 等了 {int(timeout)}s 还没生成完"
-              + ("（期间有看到生成动作）" if saw_busy[0] else "（未见生成动作）"))
+        if _stale_at_entry and not started_ok[0]:
+            print("[ai] ✗ 整轮都没看到生成启动，而结果页一直是完成态"
+                  " —— 判定为**残留结果页**，拒绝采信其字数")
+        else:
+            print(f"[ai] ✗ 等了 {int(timeout)}s 还没生成完"
+                  + ("（期间有看到生成动作）" if saw_busy[0] else "（未见生成动作）"))
         _shot(page, "ai_generate_timeout")
         return False
 
@@ -2058,23 +2174,36 @@ def generate_with_word_check(page: Page,
         生成字数在 [min_words, max_words] 之间 → 点「采纳使用」
         不够 或 超过                          → 点「重新生成」（最多 max_retry 次）
         重新生成后**回到同一套判断**，直到符合区间。
+        重试用完仍未达标 → **采纳最后一次生成的结果**（不再折腾）
+
+    ★★ 上限必须真的守住（2026-10-04 用户报障后修正）：
+      原实现里 `best_effort` 的兜底分支写成「重试用完 → 采纳**最后一轮**」，
+      这个兜底本身没错，**错的是当时 UI 把 `max_retry` 硬编码成了 0**
+      ⇒ 等于"一轮定生死"，第一轮不管多少字都走兜底直接采纳
+      ⇒ 用户 2700 字（上限 2300）甚至 1800 字（下限 2100）都被当成「完成」
+      ⇒ 字数区间形同虚设。
+
+      现在职责划分清楚：
+        · 本函数：超过上限 **同样要重新生成**（和「不够」一视同仁），
+          重试用完才用**最后一轮**兜底 —— 逻辑简单、可预期
+        · 调用方（UI）：必须传真实的 max_retry（见 ui/pages/ai_flow.py）
+        · best_effort=False 时仍然严格判失败，不点采纳
 
     ★ 保底（避免空转）：
       有些提示词天生写得短，字数很难够到 min_words，会一直在重生成路径上转。
-      因此加两层保底：
-        hard_min    —— 硬下限。重试用完后，若当轮 ≥ hard_min，仍然采纳
-                       （0 表示不启用保底）。推荐设为 min_words 的 ~85%。
-        best_effort —— True 时，重试用完若仍未入区间，采纳**最后那一轮**
-                       （至少不白跑；False 则原样返回失败，不点采纳）
+      因此保留 hard_min 一层保底：
+        hard_min —— 硬下限。重试用完后，若当轮 ≥ hard_min（但仍低于下限），
+                    仍然采纳（0 表示不启用）。推荐设为 min_words 的 ~85%。
+      ★ 注意：hard_min 只对「偏低」生效，**不会**让「偏高」被放行。
 
     Args:
         min_words:   字数下限（含），默认 2100
         max_words:   字数上限（含），默认 2300
-        max_retry:   最多重新生成几次
+        max_retry:   最多重新生成几次（0 = 不重生成，只生成一轮）
         gen_timeout: 每次生成最多等多久
         accept:      达标后是否真的点「采纳使用」（False 只报告，不点）
         hard_min:    硬下限（保底采纳），0 = 关闭
-        best_effort: 重试耗尽时是否采纳最后一轮
+        best_effort: 重试用完仍未达标时，是否采纳**最后一次**的结果
 
     Returns:
         {
@@ -2131,18 +2260,24 @@ def generate_with_word_check(page: Page,
         # ④ 不达标 → 重新生成
         why = "不够" if cnt < min_words else "超过"
         if attempt >= max_retry:
-            # ★ 重试已用完：看是否走保底
-            # ★★ 修正（2026-10-03 实测）：原逻辑只在「不够」时兜底，
-            #    「超过」直接判失败 → 不点采纳 → 弹窗留着拦住后续操作。
-            #    这跟用户「让字数限制宽一点、避免重试、一次过」的意图相反。
-            #    现在：**多了也认**（超过上限但有内容 → best_effort 采纳）。
-            if (hard_min > 0 and cnt >= hard_min and cnt < min_words):
-                print(f"[ai] ⚠ {cnt} 字{why}，但 ≥ 硬下限 {hard_min} → 保底采纳")
-                return _accept_now(cnt, f"未达标(≥{hard_min}保底)")
+            # ★★ 重试已用完 —— 用**最后一次生成的结果**兜底（2026-10-04 用户明确要求）。
+            #
+            #   规则（简单、可预期）：
+            #     · 只要还没达标，就重试（最多 max_retry 次）—— 太多、太少都重试
+            #     · 重试都用完仍未达标 → **采纳最后一次**的结果，不再折腾
+            #
+            #   历史与教训：
+            #     · 最早：只有「不够」才兜底，「超过」直接判失败 → 弹窗留着不采纳，
+            #       反而拦住后续操作
+            #     · 2026-10-03 改成「**多了也认**」，但当时 UI 把 max_retry 写死成 0
+            #       ⇒ **第一轮无论多少字都直接采纳**，字数区间形同虚设
+            #       ⇒ 用户报「2700 字竟然过了 2100-2300 的限制」
+            #     · 现在：**超上限同样要重试**（上面已统一处理）；真到重试用完，
+            #       才用最后一轮兜底。配合 UI 侧不再写死 0，区间才真正生效。
             if best_effort and cnt > 0:
-                print(f"[ai] ⚠ {cnt} 字{why}，重试用完 → 取回本轮（尽力而为）"
-                      f"{'（超过上限，也认）' if cnt > max_words else ''}")
-                return _accept_now(cnt, "尽力而为")
+                print(f"[ai] ⚠ {cnt} 字{why}，重试 {max_retry} 次仍未达标"
+                      f" → 采纳**最后一次**的结果（{cnt} 字）")
+                return _accept_now(cnt, "重试用完(取最后一轮)")
             print(f"[ai] ✗ {cnt} 字（{why}），已达最大重试次数 {max_retry}")
             return {"ok": False, "words": cnt, "tries": tries,
                     "rounds": rounds,
