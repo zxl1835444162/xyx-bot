@@ -1,0 +1,134 @@
+name: build-macos
+
+# 打 macOS 应用（XYXBot.app）并上传产物。
+#
+# 触发方式：
+#   * 手动（Actions 页面点 Run workflow）—— 平时想拿个包就这么用
+#   * push 标签 v*        —— 顺便挂到 GitHub Release 上
+#   * 改动打包相关文件时自动跑一次，确认没打坏
+#
+# ★ 关于 runner 标签（2026-10 现状）
+#   * macos-13        已退役（2025-12）
+#   * macos-14        正在退役（2026-10 公告），所以不用
+#   * macos-15        Apple Silicon (arm64)  ← 用这个
+#   * macos-15-intel  Intel (x86_64)，GitHub 承诺支持到 2027-08 ← 用这个
+#   * macos-latest 现在等于 macos-26；用固定标签避免哪天被换掉
+#
+# ★ PyInstaller **不能跨平台编译**：arm64 的包必须在 arm64 机器上打。
+#   所以这里用 matrix，每个架构各自在自己的 runner 上构建。
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+    paths:
+      - "packaging/**"
+      - ".github/workflows/build-macos.yml"
+  pull_request:
+    paths:
+      - "packaging/**"
+      - ".github/workflows/build-macos.yml"
+
+permissions:
+  contents: write          # 打标签时需要创建 Release
+
+jobs:
+  build:
+    name: build (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15          # Apple Silicon
+            arch: arm64
+          - runner: macos-15-intel    # Intel（支持到 2027-08）
+            arch: x86_64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 确认这个 Python 带 tkinter（GUI 的硬前提）
+        run: |
+          python -c "import tkinter, sys, platform; print('tk', tkinter.TkVersion, '| py', sys.version.split()[0], '| ', platform.machine())"
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-gui.txt
+          pip install "pyinstaller>=6.6"
+
+      - name: 打包前的纯逻辑测试（跑不过就别打包）
+        shell: bash
+        run: |
+          set -e
+          for t in test_fixes test_waiting test_runplan test_memory test_portability; do
+            echo "=============================== $t ==============================="
+            python "tests/$t.py"
+          done
+
+      - name: PyInstaller 打包
+        run: pyinstaller --clean --noconfirm packaging/macos/xyxbot.spec
+
+      - name: 校验产物（存在 / 可执行 / 架构 / 体积）
+        shell: bash
+        run: |
+          set -e
+          APP="dist/XYXBot.app"
+          BIN="$APP/Contents/MacOS/XYXBot"
+          test -d "$APP"      || { echo "✗ 没有 $APP"; exit 1; }
+          test -x "$BIN"      || { echo "✗ $BIN 不可执行"; exit 1; }
+          echo "--- file ---";        file "$BIN"
+          echo "--- 架构 ---";        lipo -archs "$BIN" || true
+          echo "--- 体积 ---";        du -sh "$APP"
+          echo "--- 关键内容 ---"
+          ls "$APP/Contents/MacOS" | head -20
+          # Playwright 的 driver 必须在包里，否则浏览器起不来
+          if find "$APP" -name "node" -o -name "playwright.sh" | head -1 | grep -q .; then
+            echo "✓ 找到 Playwright driver"
+          else
+            echo "✗ 包里没有 Playwright driver"; exit 1
+          fi
+          # 我们自己的包
+          for p in src ui; do
+            find "$APP" -name "$p" -type d | head -1 | grep -q . \
+              || { echo "✗ 包里缺少 $p"; exit 1; }
+          done
+          echo "✓ 包内容检查通过"
+
+      - name: 冒烟：跑包内自检（不创建窗口，所以 runner 上也能跑）
+        shell: bash
+        run: |
+          set -e
+          ./dist/XYXBot.app/Contents/MacOS/XYXBot --selftest
+
+      - name: 压缩（ditto 保留权限与符号链接）
+        shell: bash
+        run: |
+          set -e
+          ditto -c -k --keepParent dist/XYXBot.app "dist/XYXBot-macos-${{ matrix.arch }}.zip"
+          ls -lh dist/*.zip
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: XYXBot-macos-${{ matrix.arch }}
+          path: dist/XYXBot-macos-${{ matrix.arch }}.zip
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: 打标签时挂到 Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          TAG="${GITHUB_REF_NAME}"
+          gh release view "$TAG" >/dev/null 2>&1 || \
+            gh release create "$TAG" --title "$TAG" --notes "自动构建于 $GITHUB_SHA"
+          gh release upload "$TAG" "dist/XYXBot-macos-${{ matrix.arch }}.zip" --clobber

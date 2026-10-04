@@ -1,0 +1,41 @@
+# 登录态 / 浏览器用户数据 / 产物
+# ★ 重要：artifacts/storage/ 里有明文的登录票据（state.json），绝不能提交
+artifacts/storage/
+artifacts/screenshots/
+artifacts/traces/
+artifacts/logs/
+artifacts/
+
+# 万一 state 被放到别处，也别提交
+state.json
+state.backup.json
+session_meta.json
+credentials.json
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.venv312/
+.venv-mac/           # macOS 打包用的虚拟环境
+venv/
+
+# 打包产物（CI 会重建，不要提交）
+build/
+dist/
+*.spec.bak
+packaging/**/build/
+packaging/**/dist/
+
+# macOS
+.DS_Store
+*.icns.tmp
+
+# 图标生成的中间产物（2048 干净图，体积大；由 scripts/make_icons.py 现生成）
+#   ★ 最终用的 icon.icns / icon.ico / icon-1024.png / icon-256.png 是要提交的
+packaging/icons/icon-clean.png
+
+# 编辑器
+.idea/
+.vscode/
+.DS_Store

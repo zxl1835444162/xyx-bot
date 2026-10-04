@@ -1,0 +1,58 @@
+name: tests
+
+# 三平台跑测试。
+# 目的：确认这套代码在 macOS 上没有"只有 Windows 才能过"的隐含假设。
+# GUI 测试在没有窗口服务器的 runner 上会**自动 SKIP**（见
+# tests/test_gui_pages.py 的 _require_display），跨平台逻辑由
+# tests/test_portability.py 兜底。
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / py${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+          - macos-15          # Apple Silicon；macos-13 已退役、macos-14 正在退役
+        python: ["3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-gui.txt
+          pip install pyyaml
+
+      - name: 环境自检（tkinter / 数据目录 / Playwright driver）
+        run: python main.py selftest
+        continue-on-error: true        # 无窗口服务器时"图形会话"会报不可用
+
+      - name: 纯逻辑测试（不需要窗口）
+        shell: bash
+        run: |
+          set -e
+          for t in test_fixes test_waiting test_runplan test_memory test_portability; do
+            echo "=============================== $t ==============================="
+            python "tests/$t.py"
+          done
+
+      - name: GUI 测试（无窗口服务器时会自动 SKIP）
+        run: python tests/test_gui_pages.py

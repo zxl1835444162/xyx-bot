@@ -1,0 +1,6 @@
+# GUI 模式依赖（需要带 tkinter 的 Python）
+playwright>=1.47.0
+# 截图工具 ui/shot.py 用 ImageGrab 抓窗口（开发期视觉验证）；
+# scripts/make_icons.py 也用它生成 .icns / .ico。
+# ★ 之前一直是"用到了但没声明"，干净环境里跑 smoke_gui.py 会 ImportError。
+Pillow>=10.0

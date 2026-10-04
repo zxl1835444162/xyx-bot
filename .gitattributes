@@ -1,0 +1,10 @@
+# Windows 批处理必须 CRLF，否则解析错乱
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Shell 脚本强制 LF
+*.sh text eol=lf
+*.command text eol=lf
+
+# .command 保留可执行位
+*.command -text
