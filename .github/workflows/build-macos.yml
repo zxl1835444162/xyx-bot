@@ -77,6 +77,15 @@ jobs:
             python "tests/$t.py"
           done
 
+      - name: ★ 登录 → 主界面 回归（真实事件循环，卡住就别打包了）
+        # ★ macOS 上「点登录后鼠标转圈、主界面不出来」的根因是
+        #   嵌套 mainloop。这个测试跑真实 mainloop + 看门狗，
+        #   在 macOS runner 上曾经**卡死 8 分钟**，所以必须在打包前拦住。
+        env:
+          XYX_NO_DIALOG: "1"
+          XYX_HANG_SECONDS: "20"
+        run: python tests/repro_login.py
+
       - name: PyInstaller 打包
         run: pyinstaller --clean --noconfirm packaging/macos/xyxbot.spec
 

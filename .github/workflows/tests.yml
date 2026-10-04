@@ -65,3 +65,13 @@ jobs:
         env:
           XYX_NO_DIALOG: "1"
         run: python tests/test_login_flow.py
+
+      - name: ★ 登录 → 主界面 回归（真实事件循环；无窗口会自动 SKIP）
+        # 这一条是「点登录后卡死」的守门人：
+        # 以前所有 GUI 测试只"构造"窗口、从不跑 mainloop，所以看不见
+        # "窗口建好了但事件循环死了"。这个测试跑真实 mainloop，
+        # 而且带看门狗 —— 卡住会直接 dump 主线程栈。
+        env:
+          XYX_NO_DIALOG: "1"
+          XYX_HANG_SECONDS: "20"
+        run: python tests/repro_login.py

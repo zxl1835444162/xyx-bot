@@ -150,14 +150,15 @@ check_true("（这一步同时覆盖了 B「9 个页面」与 C「登录窗销�
            True)
 
 # ==================================================== D. 静态检查
-print("\n=== D. 静态检查：launch_main 不能再裸奔 ===")
+print("\n=== D. 静态检查：顶层流程不能再裸奔 ===")
 _rg = (ROOT / "run_gui.py").read_text(encoding="utf-8")
-check_true("launch_main 里包了 try/except（失败要弹出来）",
-           "主界面启动失败" in _rg)
+check_true("主界面启动失败会弹出来（不静默）", "主界面启动失败" in _rg)
 check_true("main() 里先装异常处理器再建窗口",
-           _rg.index("_install_error_handler()") < _rg.index("LoginWindow("))
+           _rg.index("_install_error_handler()") < _rg.index("_login_once()"))
 check_true("--selftest 默认连界面一起冒烟",
            'want_ui = "--no-ui" not in sys.argv' in _rg)
+check_true("有顶层循环 run_app（所有 mainloop 平级调用）",
+           "def run_app(" in _rg)
 _sel = (ROOT / "src" / "selftest.py").read_text(encoding="utf-8")
 check_true("冒烟里会真的去建登录窗（复现用户那条路）",
            "LoginWindow(" in _sel)
