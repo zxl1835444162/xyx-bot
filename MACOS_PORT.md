@@ -92,9 +92,20 @@ CI 上这几步都是**真跑过并通过**的（不只是"配置看起来对"�
 * 本项目两个架构并行 ≈ 每个 8 分钟 → 一次构建计费约 **160 分钟**
 * 所以 private 大约能跑 **每月 12 次**
 
-如果你希望**不限次数免费**，在仓库 Settings → General → 最下面
+> **2026-10-04 现状：仓库确已设为 private。**
+> 中途一度是 public（与本文档不一致），当天已改回——
+> 用 API 三重核实过：`private=true` / 匿名访问网页 **404** /
+> 匿名调 API **403**。Actions 不受影响（`enabled=true`），
+> push 与打包流水线均正常。
+>
+> ★ 提醒：private 下每次打包约烧 160 分钟的额度，**别频繁重打**。
+> 只有改动 `packaging/**`、`scripts/build_macos.sh`、
+> `.github/workflows/build-macos.yml` 时会自动触发打包；
+> 改 `ui/` `tests/` 等**不会**触发，需要时手动 Run workflow 即可。
+
+如果你希望**不限次数免费**跑打包，在仓库 Settings → General → 最下面
 "Change repository visibility" 改成 **public** 就行（一处点击，随时可改回）。
-你现有的 `novel-publisher-mac` 就是 public，所以这大概也符合你的习惯。
+
 
 ---
 
