@@ -268,6 +268,75 @@ open /Applications/XYXBot.app
 
 ---
 
+## 三点六、排障：macOS 上「输完授权码进不去主界面」
+
+用户 2026-10-04 实测反馈：登录界面正常，**输完授权码之后主界面出不来**。
+
+### 为什么之前连报错都看不到
+
+真实代码路径是这样的（`ui/login_window.py`）：
+
+```python
+self.after(420, lambda: self._enter(user))     # ← 在 Tk 回调里
+def _enter(self, user):
+    self.destroy()                             # 登录窗先销毁了
+    self._on_success(user)                     # → launch_main → MainWindow(...)
+```
+
+两个因素叠加，导致**零提示**：
+
+1. `MainWindow(...)` 一旦抛异常，**登录窗已经被销毁**，界面上什么都没有；
+2. 回调里的异常会交给 `report_callback_exception`，而它默认只把堆栈
+   `print` 到 **stderr** —— 打包成 `.app` 后 `console=False`，stderr 没有去处。
+
+所以这次的改动，一半是"让失败可见"，一半是"覆盖真实路径"：
+
+| 改动 | 作用 |
+|---|---|
+| `run_gui._install_error_handler()` | 接管 `report_callback_exception` → **弹窗显示堆栈** + 写 `logs/fatal.log` |
+| `run_gui.launch_main()` 包 try/except | 即使不走 Tk 回调，失败也会弹出来 |
+| `ui/main_window.py::_present()` | deiconify + lift + 短暂置顶 + 抢焦点 —— 针对"窗口建好了但没到前台"（macOS 上"销毁再建 root"容易出现） |
+| `--selftest` 连界面一起冒烟 | 构造主窗口 + 9 个页面，并复现「登录窗→销毁→主窗」 |
+| `--selftest --window` | 再跑真实事件循环，检查窗口**真的显示出来了吗** |
+| `tests/test_login_flow.py` | 21 项回归，把这条路径钉住 |
+
+### 在 Mac 上怎么查
+
+```bash
+# 1) 最直接的：看界面到底能不能构造、窗口能不能显示
+/Applications/XYXBot.app/Contents/MacOS/XYXBot --selftest
+
+# 2) 如果上面说"窗口没显示出来"，或你仍进不去，看这个日志
+cat ~/Library/Application\ Support/XYXBot/artifacts/logs/fatal.log
+```
+
+`--selftest` 会打印三步结果，把输出发我即可：
+
+```
+[1/2] 构造主窗口，并逐个构建 9 个页面 …     ✓ / ✗
+[2/2] 复现真实顺序：登录窗 → 销毁 → 主窗口 …  ✓ / ✗
+```
+
+现在再打开应用，如果还是进不去，**应该会弹出一个带堆栈的错误框**；
+关掉它，`logs/fatal.log` 里也有同一份。
+
+### 一个踩到的坑：CI 上做窗口显示探测会永久卡死
+
+"窗口真的显示出来了吗"需要跑真实 `mainloop()` 并让窗口映射到屏幕。
+实测这东西在 **GitHub 的 macOS runner** 上**永久卡住**：
+
+* `tests` 的 macos job 和 `build-macos` 的两个 job 全卡在包内自检那一步，
+  跑了 8 分钟以上只能手动取消；
+* 那种 runner 虽然 `tk.Tk()` 能建出来（自检报「图形会话可用」），
+  但**没有真正的登录会话去显示窗口** —— `after` 定时器永不触发，
+  `quit()` 永远等不到。
+
+所以窗口探测的规则是：**用户本机默认开，检测到 `CI` 环境变量就自动关**，
+也可以用 `XYX_SELFTEST_WINDOW=1/0` 强制。两个工作流也都加了
+`timeout-minutes` 兜底，防止以后再有人（或以后的 AI）踩这个坑把额度烧光。
+
+---
+
 ## 四、平台适配清单（改了什么）
 
 | 位置 | 改动 | 为什么 |
