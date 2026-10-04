@@ -197,8 +197,55 @@ def _has_display() -> tuple:
         return False, f"{type(e).__name__}: {e}"
 
 
+def _probe_window(win, ms: int = 1200) -> dict:
+    """让事件循环真的跑一小会儿，回报窗口**到底有没有显示出来**。
+
+    ★★ 这一步是之前所有测试的盲区（2026-10-04）：
+      之前的 GUI 测试只"构造"窗口、从不跑 mainloop，所以只能发现
+      "构造时抛异常"，**发现不了"窗口建好了但没显示/没到前台"**。
+      而用户反馈的正是"主界面出不来" —— 必须让事件循环跑起来才测得到。
+
+    用 `after` 取一次状态然后 `quit()`，另加一个兜底 `after` 防止卡死，
+    所以最多阻塞 ms+3000 毫秒。
+    """
+    res: dict = {}
+
+    def _grab():
+        try:
+            res["mapped"] = bool(win.winfo_ismapped())
+            res["viewable"] = bool(win.winfo_viewable())
+            res["state"] = win.state()
+            res["geometry"] = win.geometry()
+            res["screen"] = f"{win.winfo_screenwidth()}x{win.winfo_screenheight()}"
+        except Exception as e:
+            res["error"] = f"{type(e).__name__}: {e}"
+        try:
+            win.quit()
+        except Exception:
+            pass
+
+    try:
+        win.after(ms, _grab)
+        win.after(ms + 3000, win.quit)      # 兜底：绝不无限等
+        win.mainloop()
+    except Exception as e:
+        res.setdefault("error", f"{type(e).__name__}: {e}")
+    return res
+
+
+def _visible(res: dict) -> tuple:
+    """(是否真的显示出来了, 说明)。"""
+    if res.get("error"):
+        return False, f"探测出错：{res['error']}"
+    st = res.get("state", "?")
+    if res.get("viewable"):
+        return True, f"已显示（state={st} {res.get('geometry')}）"
+    return False, (f"**没显示出来**（state={st} mapped={res.get('mapped')} "
+                   f"geometry={res.get('geometry')}）")
+
+
 def smoke_main_window(verbose: bool = True) -> int:
-    """★ 真的把「登录窗 → 主界面」这条路走一遍（只构造，不进事件循环）。
+    """★ 真的把「登录窗 → 主界面」这条路走一遍。
 
     ★★ 为什么必须做这个（2026-10-04 用户实测：macOS 上「输完授权码进不去」）
     =====================================================================
@@ -214,12 +261,15 @@ def smoke_main_window(verbose: bool = True) -> int:
 
     用户看到的就是：登录窗消失、主界面不出现、**没有任何提示**。
 
-    所以这里做两件事，覆盖两种可能的根因：
-      [1] 直接构造主窗口 + 把 9 个页面都构建一遍
-          → 抓「某个页面/某个模块在打包产物里缺失」
-      [2] 复现真实顺序：先建登录窗、销毁、再建主窗口
-          → 抓「同一个进程里前后建两个 Tk root」这类平台差异
-            （macOS 的 Aqua Tk 对多 root / 重建 root 一向更挑剔）
+    三种可能的根因，这里逐个覆盖：
+
+      [1] 主窗口 / 某个页面构造时抛异常
+          → 构造 MainWindow + 把 9 个页面都构建一遍
+      [2] 窗口建出来了但**没显示出来/没到前台**（macOS 上"销毁再建 root"
+          之后容易这样；构造成功所以什么都不报，用户就是"进不去"）
+          → **跑真实事件循环**，检查 winfo_viewable()/state()
+      [3] 打包产物缺模块（只有 .app 里才缺，源码跑没问题）
+          → 这个函数在包内 `--selftest` 里也会跑，直接暴露
 
     Returns:
         0 = 都通过（或没有图形会话，跳过）；1 = 有失败
@@ -235,13 +285,12 @@ def smoke_main_window(verbose: bool = True) -> int:
 
     rc = 0
 
-    # ---- [1] 全新 root 直接构造主窗口 + 构建所有页面 ----
-    _out("  [1/2] 构造主窗口，并逐个构建 9 个页面 …")
+    # ---- [1] 全新 root 构造主窗口 + 构建所有页面 ----
+    _out("  [1/3] 构造主窗口，并逐个构建 9 个页面 …")
     try:
         from ui.main_window import MainWindow
 
         win = MainWindow(username="selftest")
-        win.withdraw()
         pages = ("run", "setup", "more", "overview", "account",
                  "books", "tasks", "settings", "about")
         failed_pages = []
@@ -267,18 +316,54 @@ def smoke_main_window(verbose: bool = True) -> int:
         for line in traceback.format_exc().splitlines():
             _out("           " + line)
 
-    # ---- [2] 复现真实路径：登录窗 → 销毁 → 主窗口 ----
-    _out("  [2/2] 复现真实顺序：登录窗 → 销毁 → 主窗口 …")
+    # ---- [2] 主窗口到底显示出来了没有（跑真实事件循环）----
+    _out("  [2/3] 跑事件循环，检查主窗口是否真的显示出来 …")
+    try:
+        from ui.main_window import MainWindow
+
+        win = MainWindow(username="selftest")
+        probe = _probe_window(win)
+        shown, why = _visible(probe)
+        if shown:
+            _out(f"        ✓ 主窗口已显示  {why}")
+        else:
+            rc = 1
+            _out(f"        ✗ {why}")
+        try:
+            win.destroy()
+        except Exception:
+            pass
+    except Exception:
+        rc = 1
+        _out("        ✗ 失败：")
+        for line in traceback.format_exc().splitlines():
+            _out("           " + line)
+
+    # ---- [3] 复现真实顺序：登录窗 → 销毁 → 主窗口（带事件循环）----
+    _out("  [3/3] 复现真实顺序：登录窗 → 销毁 → 主窗口（两个 root 都跑事件循环）…")
     try:
         from ui.login_window import LoginWindow
         from ui.main_window import MainWindow
 
         lw = LoginWindow(on_success=lambda u: None)
-        lw.withdraw()
+        p1 = _probe_window(lw)
+        s1, w1 = _visible(p1)
+        _out(f"        {'✓' if s1 else '✗'} 登录窗：{w1}")
         lw.destroy()
+
         win2 = MainWindow(username="selftest")
-        win2.withdraw()
-        _out("        ✓ 登录窗销毁后，仍能创建主窗口")
+        p2 = _probe_window(win2)
+        s2, w2 = _visible(p2)
+        if s2:
+            _out(f"        ✓ 登录窗销毁后，主窗口仍能正常显示：{w2}")
+        else:
+            rc = 1
+            _out("        ✗ **这就是「输完授权码进不去主界面」** —— 登录窗没了，"
+                 "主窗口建出来了但没显示：")
+            _out(f"           {w2}")
+            _out(f"           （登录窗当时是：{w1}）")
+        if not s1:
+            _out("        ⚠ 登录窗本身也没探到「已显示」（可能只是探测时机问题）")
         try:
             win2.destroy()
         except Exception:

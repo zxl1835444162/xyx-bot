@@ -157,32 +157,52 @@ import types
 
 from ui.theme import BrandButton
 
-root = tk.Tk()
-root.withdraw()
-calls: list[int] = []
-btn = BrandButton(root, "t", command=lambda: calls.append(1))
-btn._btn_w, btn._btn_h = 160, 38
+
+def _has_display() -> bool:
+    """★ 探一下有没有可用窗口服务器。
+
+    Linux 的 CI runner 没有 $DISPLAY，`tk.Tk()` 会抛
+    `TclError: no display name and no $DISPLAY environment variable`，
+    整个测试文件就崩在这里（之前 ubuntu 一直是红的，就是这个原因）。
+    这一节必须真窗口，所以探不到就**只跳过这一节**，后面的检查继续跑
+    —— 而不是整个文件退出。
+    """
+    try:
+        r = tk.Tk()
+        r.withdraw()
+        r.destroy()
+        return True
+    except Exception as e:
+        print(f"  [SKIP] 没有可用的窗口服务器（{type(e).__name__}: {e}）")
+        print("         跳过本节（需要真窗口），后续检查继续")
+        return False
 
 
-def click():
-    btn._on_release(types.SimpleNamespace(x=5, y=5))
+if _has_display():
+    root = tk.Tk()
+    root.withdraw()
+    calls: list[int] = []
+    btn = BrandButton(root, "t", command=lambda: calls.append(1))
+    btn._btn_w, btn._btn_h = 160, 38
 
+    def click():
+        btn._on_release(types.SimpleNamespace(x=5, y=5))
 
-click()
-check("enabled click fires", len(calls), 1)
-btn.config(state="disabled")
-click()
-check("disabled click blocked (config)", len(calls), 1)
-check("config(state) sets _enabled", btn._enabled, False)
-btn.config(state="normal")
-click()
-check("re-enabled click fires", len(calls), 2)
-btn.set_enabled(False)
-click()
-check("disabled click blocked (set_enabled)", len(calls), 2)
-btn.configure(background="#123456")
-check("configure forwards other options", btn.cget("background"), "#123456")
-root.destroy()
+    click()
+    check("enabled click fires", len(calls), 1)
+    btn.config(state="disabled")
+    click()
+    check("disabled click blocked (config)", len(calls), 1)
+    check("config(state) sets _enabled", btn._enabled, False)
+    btn.config(state="normal")
+    click()
+    check("re-enabled click fires", len(calls), 2)
+    btn.set_enabled(False)
+    click()
+    check("disabled click blocked (set_enabled)", len(calls), 2)
+    btn.configure(background="#123456")
+    check("configure forwards other options", btn.cget("background"), "#123456")
+    root.destroy()
 
 # ============================================================ 3. novel 渲染
 print("\n=== 3. src.novel 的 #@ 与未知代号 ===")

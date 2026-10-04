@@ -158,9 +158,22 @@ check_true("main() 里先装异常处理器再建窗口",
            _rg.index("_install_error_handler()") < _rg.index("LoginWindow("))
 check_true("--selftest 默认连界面一起冒烟",
            'want_ui = "--no-ui" not in sys.argv' in _rg)
+_sel = (ROOT / "src" / "selftest.py").read_text(encoding="utf-8")
 check_true("冒烟里会真的去建登录窗（复现用户那条路）",
-           "LoginWindow(" in (ROOT / "src" / "selftest.py")
-           .read_text(encoding="utf-8"))
+           "LoginWindow(" in _sel)
+# ★ 只"构造"窗口是测不出"窗口没显示"的 —— 必须跑真实事件循环
+check_true("冒烟里跑了真实事件循环（mainloop）", "mainloop()" in _sel)
+check_true("冒烟里检查了窗口是否真的可见（winfo_viewable）",
+           "winfo_viewable" in _sel)
+check_true("探测有兜底超时（after(ms + 3000, ...)），不会卡死",
+           "ms + 3000" in _sel)
+_mw = (ROOT / "ui" / "main_window.py").read_text(encoding="utf-8")
+check_true("主窗口会显式把自己推到前台（_present）",
+           "def _present" in _mw and "self.attributes(\"-topmost\", True)" in _mw)
+check_true("置顶会在 400ms 后撤掉，不长期霸占",
+           "self.after(400, _unpin)" in _mw)
+check_true("任务置顶期间不会被 _present 的撤顶误伤",
+           "_topmost_on" in _mw and "def _keep_on_top" in _mw)
 
 # ---------------------------------------------------------------- 汇总
 print("\n" + "=" * 60)

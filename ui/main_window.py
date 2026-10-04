@@ -95,6 +95,52 @@ class MainWindow(AboutPage, AccountPage, AiFlowMixin, BooksPage,
 
         self._build()
 
+        # ★ 最后把窗口显式"推"到用户面前（见 _present 的说明）
+        self._present()
+
+    def _present(self):
+        """确保主窗口真的显示出来、并且在最前面。
+
+        ★★ 为什么需要（2026-10-04 用户在 macOS 上反馈「输完授权码进不去」）
+        =====================================================================
+        真实流程是：
+
+            登录窗（第一个 Tk root）→ destroy → 主界面（第二个 Tk root）
+
+        在 macOS 的 Aqua Tk 上，**销毁再新建 root** 之后，新窗口有时不会
+        自动显示到前台（Windows 上一般没这个问题）。用户看到的就是
+        「登录窗没了、主界面不出现、也没有任何报错」。
+
+        这里显式 deiconify + lift + 短暂置顶 + 抢一次焦点，把这件事按死。
+        置顶只保持 400ms 就撤掉，避免长期霸占最前面。
+        """
+        try:
+            self.deiconify()
+        except Exception:
+            pass
+        try:
+            self.lift()
+        except Exception:
+            pass
+        try:
+            self.attributes("-topmost", True)
+
+            def _unpin():
+                # 万一这 400ms 内用户已经点了任务（任务会主动置顶），就别撤
+                if not getattr(self, "_topmost_on", False):
+                    try:
+                        self.attributes("-topmost", False)
+                    except Exception:
+                        pass
+
+            self.after(400, _unpin)
+        except Exception:
+            pass
+        try:
+            self.focus_force()
+        except Exception:
+            pass
+
     # ------------------------------------------------------------ 基础
 
     def _center(self, w: int, h: int):
@@ -613,6 +659,7 @@ class MainWindow(AboutPage, AccountPage, AiFlowMixin, BooksPage,
 
     def _keep_on_top(self, on: bool):
         """任务期间让主窗口保持置顶，避免被浏览器窗口遮挡。"""
+        self._topmost_on = bool(on)
         try:
             self.attributes("-topmost", bool(on))
             if on:
