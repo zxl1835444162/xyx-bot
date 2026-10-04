@@ -480,6 +480,18 @@ _st = (ROOT / "src" / "selftest.py").read_text(encoding="utf-8")
 check_true("打包版 --selftest 会逐页验证显示（不只是构造）",
            "页面「" in _st and "显示正常" in _st)
 
+# ★★ 2026-10-04 修正过一个**错误归因**：test_startup.py 曾写
+#   `darwin + CI → 跳过驱动`（理由「mac runner 不支持事件循环」）。
+#   但同一天两份实测推翻了它：打包的 --selftest --window 能在 mac runner
+#   显示窗口；新的全功能测试在同一台 runner 上泵了 39420 次 update()、
+#   验完 9 个页面。所以那个跳过是**过度保守**，让 mac 的 GUI 回归缺席很久。
+#   这条断言锁住修正：不许再出现「按平台/CI 一刀切跳过」。
+_ts = (ROOT / "tests" / "test_startup.py").read_text(encoding="utf-8")
+_ts_code = re.sub(r'""".*?"""', "", "\n".join(
+    l for l in _ts.splitlines() if not l.strip().startswith("#")), flags=re.S)
+check_true("test_startup 不再按 darwin+CI 一刀切跳过事件循环",
+           'startswith("darwin") and os.getenv("CI")' not in _ts_code)
+
 # YAML 能不能真的解析（有 pyyaml 就真解析，没有就退回结构检查）
 try:
     import yaml

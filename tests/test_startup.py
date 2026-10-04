@@ -206,31 +206,39 @@ print("\n=== ④ 真驱动一次启动（update 泵事件，断言窗口真的�
 def _drive_wanted() -> bool:
     """要不要真的驱动事件循环。
 
-    ★★ 为什么不是无条件跑（2026-10-04 实测）
+    ★★ 2026-10-04 修正了一个**过时的结论**（这条以前把 macOS 全跳过了）
     =====================================================================
-    驱动 Tk 事件循环（`mainloop()` 和 `update()` 都试过）在 **GitHub 的
-    macOS runner 上会阻塞** —— 那台 runner 没有真实窗口会话。实测后果：
-    build-macos 与 tests 的 macos job 都卡在这一步直到超时/被取消，
-    白白折腾十几分钟。
+    原来的注释写着「驱动 Tk 事件循环在 macOS runner 上会阻塞，那台 runner
+    没有真实窗口会话」，于是 `darwin + CI` 一律跳过。
 
-    所以规则：
-      * `XYX_STARTUP_DRIVE=1` → 强制跑（本机手动验证用）
-      * macOS + CI 环境       → **跳过**（那台 runner 上不可能跑通）
-      * 其它（Windows 本机/CI、Linux 带 DISPLAY）→ 跑
-    静态与结构检查（①②③）在任何环境都会执行，那才是 CI 需要的那部分。
+    **但这个结论是错的**，同一天被两份实测证据推翻：
+
+      ① 打包流程的 `--selftest --window` 在 **macos-15 / macos-15-intel**
+         两台 runner 上都能把主窗口显示出来（实测 0.29s ~ 1.22s）；
+      ② 新增的 `tests/test_all_features_macos.py` 在同一台 macos-15 上
+         泵了 **39420 次 update()**、跑了 5 秒、把 9 个页面逐个验证，
+         全部通过、重绘 0 次。
+
+    ⇒ macOS runner 完全有能力驱动事件循环。当初卡住大概率是**别的 bug**
+      （比如 Card 的 Configure 自激渲染风暴，2026-10-04 才修掉）被误归因
+      成「runner 不支持」——一个错误的归因让 mac 上的 GUI 回归整整缺席了。
+
+    所以规则改为：
+      * `XYX_STARTUP_DRIVE=0` → 强制跳过（万一将来某台 runner 真跑不动）
+      * `XYX_STARTUP_DRIVE=1` → 强制跑
+      * **默认跑**（含 macOS + CI）—— 跑不动由看门狗判超时并给出主线程栈
+    静态与结构检查（①②③）在任何环境都会执行。
     """
     if os.getenv("XYX_STARTUP_DRIVE", "").strip() in ("1", "true", "yes"):
         return True
-    if sys.platform.startswith("darwin") and os.getenv("CI"):
+    if os.getenv("XYX_STARTUP_DRIVE", "").strip() in ("0", "false", "no"):
         return False
     return True
 
 
 if not _drive_wanted():
-    print("  SKIP：macOS + CI 环境驱动不了 Tk 事件循环"
-          "（那台 runner 没有真实窗口会话）")
-    print("        —— 静态与结构检查（①②③）已经跑过了；")
-    print("        要在这个环境强制跑：XYX_STARTUP_DRIVE=1")
+    print("  SKIP：按 XYX_STARTUP_DRIVE=0 要求跳过事件循环驱动")
+    print("        —— 静态与结构检查（①②③）已经跑过了")
     print("\n" + "=" * 64)
     print(f"  通过 {len(PASS)} 项，失败 {len(FAIL)} 项（④ 已跳过）")
     if FAIL:
