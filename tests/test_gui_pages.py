@@ -517,7 +517,7 @@ check_true("确实生效的是 AiFlowMixin 的实现",
 KEPT = ["__init__", "_build", "show_page", "_page_header", "_ensure_app",
         "_stop_app", "_browser_path_override", "_ensure_page", "_make_app",
         "_session_log", "_run_guarded", "_run_task", "_keep_on_top",
-        "log", "_on_window_close", "_logout", "_task_names",
+        "log", "_on_window_close", "_task_names",
         "_page_builders", "_page_labels"]
 for n in KEPT:
     check_true(f"MainWindow 保留骨架 {n}", n in MainWindow.__dict__)

@@ -63,8 +63,7 @@ class MainWindow(AboutPage, AccountPage, AiFlowMixin, BooksPage,
     `master=None` 时自动建一个自己的 root，兼容单独使用与单元测试。
     """
 
-    def __init__(self, master=None, username: str = "用户",
-                 on_logout: Optional[Callable[[], None]] = None,
+    def __init__(self, master=None, username: str = "本机用户",
                  on_quit: Optional[Callable[[], None]] = None):
         # ★ 兼容老写法：不传 master 就自己建一个 root（并藏起来）
         if master is None:
@@ -78,7 +77,6 @@ class MainWindow(AboutPage, AccountPage, AiFlowMixin, BooksPage,
             self._owns_root = False
         super().__init__(master)
         self._username = username
-        self._on_logout = on_logout
         # ★ 用户点关闭按钮时通知外层（外层负责结束事件循环）。
         #   没有它的话，单 root 架构下关掉主界面后事件循环还在跑，
         #   程序会变成一个"看不见却活着"的进程。
@@ -379,13 +377,11 @@ class MainWindow(AboutPage, AccountPage, AiFlowMixin, BooksPage,
                  font=F(8), bg=COLOR["bg_titlebar"],
                  fg=COLOR["brand"]).pack(anchor="w")
 
-        # 右侧：用户 + 登出
+        # 右侧：用户信息
+        # ★ 2026-10-04 按用户要求删掉登录界面 —— 没有登录了，"退出登录"
+        #   这个按钮也就没有意义，一并去掉（关窗即退出程序）。
         right = tk.Frame(bar, bg=COLOR["bg_titlebar"])
         right.pack(side="right", fill="y", padx=18)
-
-        BrandButton(right, "退出登录", command=self._logout, width=88,
-                    height=32, style="ghost", bg=COLOR["bg_titlebar"],
-                    font_size=9).pack(side="right", pady=16)
 
         userbox = tk.Frame(right, bg=COLOR["bg_titlebar"])
         userbox.pack(side="right", padx=(0, 14), pady=16)
@@ -775,17 +771,17 @@ class MainWindow(AboutPage, AccountPage, AiFlowMixin, BooksPage,
     def log(self, msg: str, level: str = "info"):
         self.log_view.log(msg, level)
 
-    def _teardown(self, *, closing: bool):
-        """★ 关窗 / 退登**共用**的清理：先落盘，再关浏览器，最后销毁并通知外层。
+    def _teardown(self):
+        """★ 关窗清理：先落盘，再关浏览器，最后销毁窗口并通知外层。
 
         ★ 2026-10-04：关窗前把「该记住的东西」落盘 —— 窗口大小/位置 +
           界面配置 + 小说轻量记忆（细纲）。否则用户填完细纲直接关窗就丢了。
 
-        ★ 根因修复（更早）：原来既没有 `WM_DELETE_WINDOW` 绑定，`_logout` 也不调
+        ★ 根因修复（更早）：原来既没有 `WM_DELETE_WINDOW` 绑定，也没有
           `App.stop()` → 直接关窗会**残留 Playwright 浏览器进程**。
 
-        Args:
-            closing: True = 用户关窗（要退出程序）；False = 退出登录（回登录窗）。
+        ★ 2026-10-04 删掉登录界面后：不再有"退出登录回登录窗"这条路，
+          关窗就是退出程序（所以不再需要 `closing` 参数）。
         """
         # ① 先存（此时控件还在，能读到值）
         try:
@@ -814,22 +810,17 @@ class MainWindow(AboutPage, AccountPage, AiFlowMixin, BooksPage,
         # ④ 通知外层（★ 单 root 架构下这一步是必须的：窗口都没了，
         #    事件循环还活着的话程序就变成"看不见却活着"）
         try:
-            if closing:
-                if self._on_quit:
-                    self._on_quit()
-            else:
-                if self._on_logout:
-                    self._on_logout()
+            if self._on_quit:
+                self._on_quit()
         except Exception:
             pass
 
     def _on_window_close(self):
-        """用户点了窗口关闭按钮（红叉）→ 清理并退出程序。"""
-        self._teardown(closing=True)
+        """用户点了窗口关闭按钮（红叉）→ 清理并退出程序。
 
-    def _logout(self):
-        """点了「退出登录」→ 清理并回到登录窗（**不退出程序**）。"""
-        self._teardown(closing=False)
+        ★ 2026-10-04 删掉登录界面后，关窗就是**退出程序**（不再有"回到登录窗"）。
+        """
+        self._teardown()
 
 
 # ================================================================ 组件

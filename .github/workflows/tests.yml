@@ -61,17 +61,14 @@ jobs:
           XYX_NO_DIALOG: "1"        # 别让模态窗把 runner 卡住
         run: python tests/test_gui_pages.py
 
-      - name: 登录流程测试（登录窗 → 销毁 → 主界面）
-        env:
-          XYX_NO_DIALOG: "1"
-        run: python tests/test_login_flow.py
-
-      - name: ★ 登录 → 主界面 回归（真实事件循环；无窗口会自动 SKIP）
-        # 这一条是「点登录后卡死」的守门人：
-        # 以前所有 GUI 测试只"构造"窗口、从不跑 mainloop，所以看不见
-        # "窗口建好了但事件循环死了"。这个测试跑真实 mainloop，
-        # 而且带看门狗 —— 卡住会直接 dump 主线程栈。
+      - name: ★ 启动 → 主操控界面 回归（真实事件循环；无窗口会自动 SKIP）
+        # 这一条是「启动后界面没出来」的守门人：
+        # 以前所有 GUI 测试只"构造"窗口、从不驱动事件循环，所以看不见
+        # "窗口建好了但没显示/事件循环死了"。这个测试用 update() 泵事件
+        # 走完真实启动流程，并断言主窗口**真的可见**；带看门狗，
+        # 卡住会直接 dump 主线程栈。
         env:
           XYX_NO_DIALOG: "1"
           XYX_HANG_SECONDS: "20"
-        run: python tests/repro_login.py
+          XYX_PUMP_SECONDS: "10"
+        run: python tests/test_startup.py

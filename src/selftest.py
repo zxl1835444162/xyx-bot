@@ -322,34 +322,30 @@ def _window_probe_wanted() -> bool:
 
 def smoke_main_window(verbose: bool = True,
                       window_probe: bool | None = None) -> int:
-    """★ 真的把「登录窗 → 主界面」这条路走一遍。
+    """★ 把界面这条路真的走一遍（构造 + 可选地验证"真的显示出来了"）。
 
-    ★★ 为什么必须做这个（2026-10-04 用户实测：macOS 上「输完授权码进不去」）
+    ★★ 为什么必须做这个（2026-10-04 用户实测：macOS 上「登录后界面没了」）
     =====================================================================
 
-    打包成 .app 后 `console=False`，**stderr 是断的**。而真实流程是：
+    打包成 .app 后 `console=False`，**stderr 是断的**：回调里的异常默认只
+    `print` 到 stderr（= 无处可去），用户看到的就是"点了没反应、什么都不显示"。
 
-        LoginWindow._enter()          # 在 self.after(...) 回调里
-            self.destroy()            # 登录窗先销毁
-            self._on_success(user)    # → launch_main → MainWindow(...)
-                                      #   这里一抛异常，Tk 就把它交给
-                                      #   report_callback_exception，
-                                      #   默认只 print 到 stderr（= 无处可去）
+    ★ 2026-10-04 按用户要求**删掉了登录界面**，只留一个主操控界面 ——
+      所以原来那条「登录窗 → 销毁 → 主窗」的切换路径**整个不存在了**，
+      用户报的问题也就没有了发生的场所。
 
-    用户看到的就是：登录窗消失、主界面不出现、**没有任何提示**。
-
-    三种可能的根因，这里逐个覆盖：
+    现在覆盖三件事：
 
       [1] 主窗口 / 某个页面构造时抛异常，或打包产物缺模块
           → 构造 MainWindow + 把 9 个页面都构建一遍（**不映射窗口**，
             所以任何环境都能安全跑，包括 CI）
-      [2] 窗口建出来了但**没显示出来/没到前台**（macOS 上"销毁再建 root"
-          之后容易这样；构造成功所以什么都不报，用户就是"进不去"）
-          → 跑真实事件循环，检查 winfo_viewable()/state()
-          ★ 这一步会真的显示窗口，**只在用户本机默认开启**，CI 里关闭
-            （见 `_window_probe_wanted`）
-      [3] 「登录窗 → 销毁 → 主窗」这条顺序本身有问题
-          → 始终执行；有窗口探测时带事件循环，否则只做构造
+      [2] 窗口建出来了但**没显示出来/没到前台**
+          → 跑真实事件循环，检查 `winfo_viewable()`/`state()`
+          ★ 这一步会真的显示窗口；因为它在**没有真实窗口会话**的 CI runner
+            上会阻塞，所以默认关闭（见 `_window_probe_wanted`），
+            CI 里放在单独一步 + `timeout` 跑
+      [3] 关窗要能通知外层、让事件循环退出
+          → 单 root 架构下，窗口没了但循环还活着 = "看不见却活着"的进程
 
     Returns:
         0 = 都通过（或没有图形会话，跳过）；1 = 有失败
@@ -367,11 +363,9 @@ def smoke_main_window(verbose: bool = True,
         window_probe = _window_probe_wanted()
     n_steps = 3 if window_probe else 2
 
-    # ★★★ 只建**一个** Tk root，登录窗/主界面都是它的 Toplevel。
-    #     这和 `run_gui.run_app` 的真实结构一致 —— 也是 macOS 上唯一能用的结构：
-    #     在 macOS 上，一个进程里第 2 个 `tk.Tk()` 的事件循环收不到任何事件
-    #     （窗口不绘制、after 不触发、不抛异常）。冒烟测试必须复现真实结构，
-    #     否则它"通过"也说明不了什么。
+    # ★★★ 只建**一个** Tk root，主窗口是它的 Toplevel —— 和
+    #     `run_gui.run_app` 的真实结构一致（也是 macOS 上唯一能用的结构：
+    #     一个进程里第 2 个 `tk.Tk()` 的事件循环收不到任何事件）。
     #     （tkinter 在函数内 import：没装 tkinter 的环境也能用这个模块做环境检查）
     import tkinter as tk
 
@@ -443,50 +437,36 @@ def smoke_main_window(verbose: bool = True,
             for line in traceback.format_exc().splitlines():
                 _out("           " + line)
 
-    # ---- [3] 复现真实顺序：登录窗 → 销毁 → 主窗口 ----
+    # ---- [3] 关掉主窗口后，事件循环还能正常收尾 ----
+    #  ★ 2026-10-04 删掉登录界面后，这里不再复现"登录窗→主窗口"的切换
+    #    （那次切换正是用户报的「下一个界面没了」发生的地方，现在整个没了）。
+    #    改成验证另一件真实存在的事：**关窗要能干净退出**（单 root 架构下
+    #    窗口没了但事件循环还活着，就会变成"看不见却活着"的进程）。
     label = "[3/3]" if window_probe else "[2/2]"
-    if window_probe:
-        _out(f"  {label} 复现真实顺序：登录窗 → 销毁 → 主窗口"
-             "（两个 root 都跑事件循环）…")
-    else:
-        _out(f"  {label} 复现真实顺序：登录窗 → 销毁 → 主窗口"
-             "（只构造，不映射窗口）…")
+    _out(f"  {label} 关窗后事件循环要能正常收尾 …")
     try:
-        from ui.login_window import LoginWindow
         from ui.main_window import MainWindow
 
-        lw = LoginWindow(root, on_success=lambda u: None)
-        if window_probe:
-            p1 = _probe_window(lw)
-            s1, w1 = _visible(p1)
-            _out(f"        {'✓' if s1 else '✗'} 登录窗：{w1}")
-        else:
-            lw.withdraw()
-            s1, w1 = True, "（未做显示探测）"
-        lw.destroy()
-
-        win2 = MainWindow(root, username="selftest")
+        flag: dict = {}
+        win2 = MainWindow(root, username="selftest",
+                          on_quit=lambda: flag.setdefault("quit", True))
         if window_probe:
             p2 = _probe_window(win2)
             s2, w2 = _visible(p2)
-            if s2:
-                _out(f"        ✓ 登录窗销毁后，主窗口仍能正常显示：{w2}")
-            else:
+            _out(f"        {'✓' if s2 else '✗'} 主窗口：{w2}")
+            if not s2:
                 rc = 1
-                _out("        ✗ **这就是「输完授权码进不去主界面」** —— "
-                     "登录窗没了，主窗口建出来了但没显示：")
-                _out(f"           {w2}")
-                _out(f"           （登录窗当时是：{w1}）")
         else:
             win2.withdraw()
-            _out("        ✓ 登录窗销毁后，仍能创建主窗口")
-        try:
-            win2.destroy()
-        except Exception:
-            pass
+        win2._on_window_close()          # 走真实的关窗路径
+        if flag.get("quit"):
+            _out("        ✓ 关窗通知到了外层（事件循环能退出）")
+        else:
+            rc = 1
+            _out("        ✗ 关窗没有通知外层 —— 会变成「看不见却活着」的进程")
     except Exception:
         rc = 1
-        _out("        ✗ 失败 —— 这正是「输完授权码进不去主界面」的那条路：")
+        _out("        ✗ 失败：")
         for line in traceback.format_exc().splitlines():
             _out("           " + line)
 

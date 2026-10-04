@@ -16,7 +16,7 @@ on:
   push:
     paths:
       - "tests/diag_macos_fonts.py"
-      - "tests/repro_login.py"
+      - "tests/test_startup.py"
       - ".github/workflows/diag-macos.yml"
 
 permissions:
@@ -82,10 +82,10 @@ jobs:
         run: |
           python tests/diag_canvas_configure.py || true
 
-      - name: "★ 真实驱动一次 login → main（update() 泵事件 + 截图存证）"
-        # ★ 不用 mainloop：这台 runner 的 Tcl 定时器不触发，
+      - name: "★ 真实驱动一次启动（update() 泵事件 + 截图存证）"
+        # ★ 不用 mainloop：这台 runner 的 Tcl 事件循环会阻塞，
         #   改成 update() 泵事件（不依赖定时器），并直接截图 ——
-        #   这样"点完登录后窗口到底有没有出来"就不再靠猜。
+        #   这样"启动后界面到底有没有出来"就不再靠猜。
         env:
           LANG: ${{ matrix.locale }}.UTF-8
           LC_ALL: ${{ matrix.locale }}.UTF-8
@@ -93,9 +93,8 @@ jobs:
           XYX_NO_DIALOG: "1"
           XYX_HANG_SECONDS: "25"
           XYX_PUMP_SECONDS: "12"
-          XYX_SHOT_DIR: "artifacts/screenshots"
         run: |
-          python tests/repro_login.py || true
+          python tests/test_startup.py || true
 
       - name: 上传截图（看主窗口到底出没出来）
         if: always()

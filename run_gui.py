@@ -207,13 +207,17 @@ def run_app() -> int:
         族名也不会被本地化。**那条推断是错的。**
 
     正确做法：**整个程序只建一个 `tk.Tk()`**（这里建，`withdraw()` 当宿主），
-    登录窗和主界面都是它的 `tk.Toplevel`。切换窗口就是销毁一个 Toplevel、
-    再建另一个 —— 始终只有一个解释器、一个事件循环。
+    主界面是它的 `tk.Toplevel`。
+
+    ★★ 2026-10-04 用户要求：**删掉登录界面，只留一个主操控界面**
+    =====================================================================
+    所以现在没有"登录窗 → 主界面"这次窗口切换了 —— 启动就直接建主界面。
+    这顺带把用户报的「输完账号密码后下一个界面没了」**整个环节去掉**了：
+    不再有第二个窗口、不再有切换、不再有 destroy 后再建。
 
     Returns:
         进程退出码
     """
-    from ui.login_window import LoginWindow
     from ui.main_window import MainWindow
 
     # ★★ 全进程唯一的 Tk root：只当事件循环宿主，自己不显示
@@ -221,7 +225,6 @@ def run_app() -> int:
     root.withdraw()
 
     st = {"done": False, "error": False}
-    win: dict = {"main": None, "login": None}
 
     def _stop() -> None:
         """结束事件循环（程序退出）。"""
@@ -231,53 +234,19 @@ def run_app() -> int:
         except Exception:
             pass
 
-    def _drop(key: str) -> None:
-        w = win.get(key)
-        win[key] = None
-        if w is not None:
-            try:
-                w.destroy()
-            except Exception:
-                pass
+    _arm_watchdog()
+    _beacon("开始创建主界面 MainWindow")
+    try:
+        MainWindow(root, on_quit=_stop)
+    except Exception:
+        _beacon("主界面创建失败")
+        st["error"] = True
+        _show_fatal("主界面启动失败：\n\n" + traceback.format_exc())
+        return 1
+    _beacon("主界面已创建，事件循环在跑")
+    # ★ 主界面起来了 —— 之后主线程停在 mainloop 里是**正常**的，撤掉看门狗
+    _disarm_watchdog()
 
-    def _open_main(user: str) -> None:
-        _beacon("开始创建主界面 MainWindow")
-        try:
-            mw = MainWindow(root, username=user,
-                            on_logout=_on_logout, on_quit=_stop)
-        except Exception:
-            _beacon("主界面创建失败")
-            st["error"] = True
-            _show_fatal("主界面启动失败：\n\n" + traceback.format_exc())
-            _stop()
-            return
-        win["main"] = mw
-        _beacon("主界面已创建，事件循环在跑")
-        _disarm_watchdog()
-
-    def _on_logout() -> None:
-        """主界面点「退出登录」→ 关掉主界面，回到登录窗（不退出程序）。"""
-        _beacon("回到登录窗")
-        win["main"] = None          # _teardown 里已经 destroy 过了
-        _open_login()
-
-    def _open_login() -> None:
-        _arm_watchdog()
-        _beacon("创建登录窗")
-
-        def _ok(user: str) -> None:
-            _drop("login")
-            _open_main(user)
-
-        def _cancel() -> None:
-            _beacon("用户关闭了登录窗")
-            _drop("login")
-            _stop()
-
-        win["login"] = LoginWindow(root, on_success=_ok, on_cancel=_cancel)
-        _beacon("登录窗已显示，等待输入")
-
-    _open_login()
     # ★ 全进程只调用这一次 mainloop（在唯一的 root 上）
     root.mainloop()
     return 1 if st["error"] else 0

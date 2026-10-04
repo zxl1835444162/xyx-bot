@@ -192,7 +192,7 @@ check_true("launcher 优先用当前解释器", "sys.executable" in _lau)
 _rg = (ROOT / "run_gui.py").read_text(encoding="utf-8")
 check_true("run_gui.py 支持 --selftest", "--selftest" in _rg)
 check_true("run_gui.py 在 selftest 时不创建窗口",
-           "run_selftest" in _rg and _rg.index("--selftest") < _rg.index("LoginWindow"))
+           "run_selftest" in _rg and _rg.index("--selftest") < _rg.index("MainWindow"))
 
 # ---- 应用图标：源图在、产物有效、spec 真的引用了它 ----
 print("\n--- 应用图标 ---")

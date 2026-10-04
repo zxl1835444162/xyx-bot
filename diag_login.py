@@ -50,8 +50,8 @@ def main():
         print(f"    cookie  : {info['cookies']} 条")
         print(f"    大小    : {info['size']}")
     print(f"  session_meta.json: {'存在' if S.META_FILE.exists() else '不存在'}")
-    print(f"  credentials.json : "
-          f"{'存在' if (C.STORAGE / 'credentials.json').exists() else '不存在'}")
+    print(f"  state.json       : "
+          f"{'存在' if (C.STORAGE / 'state.json').exists() else '不存在'}")
 
     # ---------- 2. 起浏览器 ----------
     line("2. 打开站点检查（复用已有登录态）")

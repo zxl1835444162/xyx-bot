@@ -77,14 +77,15 @@ jobs:
             python "tests/$t.py"
           done
 
-      - name: ★ 登录 → 主界面 回归（真实事件循环，卡住就别打包了）
-        # ★ macOS 上「点登录后鼠标转圈、主界面不出来」的根因是
-        #   嵌套 mainloop。这个测试跑真实 mainloop + 看门狗，
-        #   在 macOS runner 上曾经**卡死 8 分钟**，所以必须在打包前拦住。
+      - name: ★ 启动 → 主操控界面 回归（真实事件循环，卡住就别打包了）
+        # ★ macOS 上「启动后界面出不来」的根因包括 <Configure> 渲染风暴。
+        #   这个测试用 update() 泵事件走完真实启动流程，断言主窗口**真的可见**，
+        #   并带看门狗 —— 卡住就直接 dump 主线程栈。
         env:
           XYX_NO_DIALOG: "1"
           XYX_HANG_SECONDS: "20"
-        run: python tests/repro_login.py
+          XYX_PUMP_SECONDS: "10"
+        run: python tests/test_startup.py
 
       - name: 写入构建信息（方便远程确认"用户装的是哪个版本"）
         shell: bash
@@ -159,11 +160,11 @@ jobs:
             echo "$OUT" | grep -q "$kw" || { echo "✗ 自检输出里缺少「$kw」"; exit 1; }
           done
           # ★★ 界面部分：这一步会真的构造主窗口、构建 9 个页面，
-          #    并复现「登录窗 → 销毁 → 主窗」这条真实路径。
+          #    并走一次真实关窗路径。
           #    （默认**不做**窗口显示探测 —— 那要驱动事件循环，在这台没有
           #      真实窗口会话的 runner 上会阻塞；探测放在下一步单独跑。）
           for kw in "主窗口 + 9 个页面全部构建成功" \
-                    "登录窗销毁后，仍能创建主窗口"; do
+                    "关窗通知到了外层"; do
             echo "$OUT" | grep -q "$kw" \
               || { echo "✗ 界面冒烟没通过（缺「$kw」）"; exit 1; }
           done
