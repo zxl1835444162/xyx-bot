@@ -25,7 +25,19 @@
   ✓ XYXBot-macos-x86_64    59.6 MB   ← Intel Mac
 ```
 
-产物已下载到：`C:\Users\Administrator\Downloads\xyx-bot-macos\`
+后来加了 DMG（更符合 Mac 安装习惯），产物变成：
+
+| 文件 | 用途 |
+|---|---|
+| `XYXBot-macos-arm64.dmg` | ★ 双击挂载 → 拖进「应用程序」 |
+| `XYXBot-macos-<arch>.zip` | 存档 / 需要 `ditto -x -k` 解压 |
+
+已下载到本机：`C:\Users\Administrator\Downloads\xyx-bot-macos\`
+
+> **实测过的一个偶发问题**：`hdiutil` 建 DMG 在 arm64 runner 上一次过，
+> 在 Intel runner 上偶发失败（hdiutil 本身就有"资源忙/临时空间"这类偶发毛病）。
+> 所以那一步改成了**重试 3 次 + 失败不阻断构建** ——
+> DMG 只是便利，zip 才是主产物，不该因为它的偶发问题让整次构建红掉。
 
 CI 上这几步都是**真跑过并通过**的（不只是"配置看起来对"）：
 
@@ -193,12 +205,17 @@ bash scripts/build_macos.sh
 
 ## 三、把包装到 Mac 上
 
-产物是**两层 zip**（GitHub 的 artifact 会把上传的文件再包一层）。这不是 bug，
-反而**必须**这样：macOS 的 `.app` 里有**符号链接**和**可执行权限**，
+**最简单：用 DMG**
+
+1. 把 `XYXBot-macos-arm64.dmg` 拷到 Mac 上
+2. 双击挂载 → 把 `XYXBot` 拖进「应用程序」
+3. 首次打开：**右键 → 打开**（未签名），或先执行
+   `xattr -cr /Applications/XYXBot.app`
+
+**用 zip 的话**：产物是**两层 zip**（GitHub 的 artifact 会把上传的文件再包一层）。
+这不是 bug，反而**必须**这样：macOS 的 `.app` 里有**符号链接**和**可执行权限**，
 只有 `ditto` 打的 zip 能原样保留（实测包里 57 个符号链接都在）。
 让 GitHub 直接对 `.app` 目录打 zip 会破坏这些，装上去就是打不开。
-
-所以在 Mac 上：
 
 ```bash
 # 第一次解压：拿到 ditto 打的包
