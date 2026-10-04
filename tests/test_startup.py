@@ -130,30 +130,74 @@ check_true("主窗口是 Toplevel（不是各自建 Tk root）",
                encoding="utf-8"))
 
 # ==================================================== ③ 看门狗与诊断
-print("\n=== ③ 卡死要能自己写出主线程栈 + 落到桌面 ===")
+print("\n=== ③ 卡死要能自己打出主线程栈（且**不落盘任何文件**）===")
 import run_gui  # noqa: E402
 
 for fn in ("_install_startup_watchdog", "_beacon", "_dump_hang",
            "_install_error_handler", "_log_fatal"):
     check_true(f"run_gui 提供 {fn}", hasattr(run_gui, fn))
-check_true("启动进度会写盘（强退也留证据）", "_beacon" in _rg and
-           "XYXBot-诊断.txt" in _rg)
-check_true("报告会写到桌面", "Desktop" in _rg)
-check_true("构建版本会被写进报告",
+
+# ★★ 2026-10-04 用户要求：删掉「每次都生成诊断文件」的功能，一个文件都不留。
+#   这里反过来断言：源码里**不许**再出现写盘的痕迹，防止哪天又被加回来。
+#   用 AST 取**字符串常量**之外的部分太绕，简单办法：剥掉注释行 + 三引号块，
+#   剩下的才算「代码」。
+def _strip_doc_and_comments(src: str) -> str:
+    import ast as _ast
+
+    tree = _ast.parse(src)
+    # 把所有字符串常量的**值**从源码文本里抹掉，剩下的就是代码骨架
+    out = src
+    for node in _ast.walk(tree):
+        if isinstance(node, _ast.Constant) and isinstance(node.value, str):
+            if node.value.strip():
+                out = out.replace(node.value, "\x00")
+    # 去掉注释行
+    return "\n".join(l for l in out.splitlines()
+                     if not l.strip().startswith("#"))
+
+
+_code_only = _strip_doc_and_comments(_rg)
+# 该文件名只允许出现在**清理**用途里（_cleanup_legacy_diag_files 的删除动作），
+# 绝不允许再出现写入（open(..., "a"/"w")）。
+check_true("代码里不再**写** XYXBot-诊断 文件",
+           not any("XYXBot-诊断" in l and ("open(" in l or "write" in l)
+                   for l in _code_only.splitlines()))
+check_true("保留了「启动时清理旧诊断文件」的动作（否则用户桌面上那份不会消失）",
+           "_cleanup_legacy_diag_files" in _rg
+           and "XYXBot-诊断.txt" in _rg
+           and "unlink()" in _rg)
+check_true("代码里不再拼桌面路径来**写**文件（清理用的 unlink 不算）",
+           not any('Path.home() / "Desktop"' in l
+                   and ("open(" in l or "write" in l)
+                   for l in _code_only.splitlines()))
+check_true("_beacon 仍然记录启动进度到内存（看门狗能力保留）",
+           "_BEACON" in _rg and 'p = Path.home()' not in _code_only)
+check_true("构建版本仍会带进错误文本（走 stderr）",
            "_buildinfo" in _rg or "describe()" in _rg)
 
 from src import config as C  # noqa: E402
 
+# 真跑一次：_beacon 与 _dump_hang 都不该产出任何文件
 _fatal = C.LOGS / "fatal.log"
-_before = _fatal.read_text(encoding="utf-8", errors="replace") \
-    if _fatal.exists() else ""
+_desktop_diag = ROOT.parent / "XYXBot-诊断.txt"
+try:
+    import pathlib as _pl
+
+    _desktop_diag = _pl.Path.home() / "Desktop" / "XYXBot-诊断.txt"
+except Exception:
+    pass
+_f_before = _fatal.exists()
+_d_before = _desktop_diag.exists()
+
 run_gui._beacon("测试用信标")
 run_gui._dump_hang(99.0, "单元自检")
-_after = _fatal.read_text(encoding="utf-8", errors="replace") \
-    if _fatal.exists() else ""
-_added = _after[len(_before):]
-check_true("卡死报告写进了 fatal.log", "主线程调用栈" in _added)
-check_true("报告里有最后一次进展", "测试用信标" in _added)
+
+check_true("卡死报告没有再写 fatal.log（用户要求一个文件都不留）",
+           _fatal.exists() == _f_before)
+check_true("桌面上没有生成 XYXBot-诊断.txt",
+           _desktop_diag.exists() == _d_before)
+check_true("_beacon 仍然更新了内存里的进度（看门狗能力保留）",
+           run_gui._BEACON["label"] == "测试用信标")
 
 # ==================================================== ④ 真驱动一次启动
 print("\n=== ④ 真驱动一次启动（update 泵事件，断言窗口真的显示） ===")

@@ -1,4 +1,4 @@
-"""GUI 启动入口：登录 -> 主界面。
+"""GUI 启动入口：直接打开主操控界面（登录界面已删）。
 
 用法：
     python run_gui.py                 # 启动图形界面
@@ -73,9 +73,7 @@ def _show_fatal(err: str) -> None:
             root.focus_force()
         except Exception:
             pass
-        messagebox.showerror("启动失败",
-                            err[:2000] + "\n\n（完整报告已写到桌面："
-                            "XYXBot-诊断.txt）")
+        messagebox.showerror("启动失败", err[:2000])
         if own_root:
             root.destroy()
     except Exception as _e:
@@ -89,16 +87,19 @@ def _show_fatal(err: str) -> None:
 
 
 def _log_fatal(err: str) -> None:
-    """把致命错误/卡死报告写到**好找的地方**。
+    """把致命错误/卡死报告打到 stderr（**不再落盘任何文件**）。
 
-    ★★ 为什么必须写文件（2026-10-04 用户实测：macOS 上「输完密码进不去」）
-      打包成 .app 之后 `console=False`，**stderr 是断的** ——
-      Tk 的 `report_callback_exception` 默认只把堆栈打印到 stderr，
-      于是异常在用户那儿表现为"点了没反应、什么都不显示"，
-      完全查不出原因。写文件才有据可查。
+    ★★ 2026-10-04 用户要求：**删掉诊断文件功能，一个文件都不留**
+      原因是「每一次启动都会在桌面生成一个诊断 txt，很难受」。
+      原先这里会把报告写两份（桌面那份 + 数据目录 `artifacts/logs/fatal.log`），
+      现在**两处都不写了**。
 
-    ★ 除了数据目录，还额外写一份到**桌面**：让用户一眼就能找到、直接发我。
-      （数据目录藏在 `~/Library/Application Support/...` 里，很多人找不到。）
+    ★ 为什么还能删得掉：当初写盘是因为打包成 .app 后 `console=False`，
+      stderr 断了、异常看不见。但现在启动链路已经稳定（macOS 主界面
+      实测 0.29s 就能显示出来），而且失败时还有**弹窗**兜底
+      （`_show_fatal` / `_install_error_handler` 里的 messagebox），
+      用户能看到错误，不需要再去桌面翻文件。
+      保留的只有 stderr 打印 —— 开发时在终端里照样看得见。
     """
     stamp = ""
     try:
@@ -107,33 +108,10 @@ def _log_fatal(err: str) -> None:
         stamp = B.describe() + "\n"
     except Exception:
         pass
-    text = stamp + err
-
-    targets = []
     try:
-        from src import config as C
-
-        targets.append(C.LOGS / "fatal.log")
+        print(stamp + err, file=sys.stderr)
     except Exception:
         pass
-    try:
-        targets.append(Path.home() / "Desktop" / "XYXBot-诊断.txt")
-    except Exception:
-        pass
-
-    for p in targets:
-        try:
-            p.parent.mkdir(parents=True, exist_ok=True)
-            with open(p, "a", encoding="utf-8") as f:
-                from datetime import datetime
-
-                f.write(f"\n===== {datetime.now():%Y-%m-%d %H:%M:%S} =====\n")
-                f.write(text)
-                if not text.endswith("\n"):
-                    f.write("\n")
-            print(f"[fatal] 已写入 {p}", file=sys.stderr)
-        except Exception:
-            pass
 
 
 def _install_error_handler() -> None:
@@ -151,7 +129,8 @@ def _install_error_handler() -> None:
       只是 `traceback.print_exception` 到 **stderr** —— 打包后的 .app 里
       stderr 没有去处。结果就是：登录窗消失、主界面不出现、**没有任何提示**。
 
-      这里改成：① 弹窗把堆栈显示出来；② 同时写入 logs/fatal.log。
+      这里改成：① 弹窗把堆栈显示出来；② 同时打到 stderr。
+      （★ 2026-10-04 起**不再写入任何日志文件** —— 用户要求删掉诊断文件功能。）
     """
     import tkinter as tk
 
@@ -262,10 +241,10 @@ def run_app() -> int:
 # "转圈"= 主线程被卡住（不是崩溃），所以既没有异常也没有弹窗。
 # 而这种"卡死"在别的机器上**复现不出来**（CI 的 macOS runner 上一路正常）。
 #
-# 没法复现就没法定位 —— 所以换个思路：**让卡死自己把现场写下来**。
+# 没法复现就没法定位 —— 所以换个思路：**让卡死自己把现场打出来**。
 # 这里起一个后台线程盯着"启动进度"，只要主线程超过 N 秒没动静，
-# 就把**主线程的调用栈**（卡在哪一行）连同所有线程的栈写进
-# `artifacts/logs/fatal.log`。用户那边一卡，日志里就有确切答案。
+# 就把**主线程的调用栈**（卡在哪一行）连同所有线程的栈打到 stderr
+# （原来还写 `artifacts/logs/fatal.log`，2026-10-04 起用户要求不再落盘）。
 #
 # 只在**启动阶段**武装；主界面起来后主线程停在 mainloop 是正常的，就撤掉。
 
@@ -275,20 +254,34 @@ _HANG_SECONDS = float(os.getenv("XYX_HANG_SECONDS", "12") or 12)
 
 
 def _beacon(label: str) -> None:
-    """记一次"启动有进展"，并**顺手写一行到诊断文件**。
+    """记一次「启动有进展」（**只更新内存，不落盘**）。
 
-    ★ 为什么要写盘：万一用户在主线程卡死后**强制退出**（转圈时很容易这样做），
-      看门狗可能还没到阈值、什么都没来得及写。有一条进度 trail 就能看出
-      卡在哪一步（"创建登录窗" / "开始创建主界面 MainWindow" / "主界面已创建"）。
+    ★★ 2026-10-04 用户要求删掉诊断文件功能
+      原先这里会往桌面那个诊断 txt **追加一行启动进度**：
+      进程每次启动都会写，于是桌面不断多出/变长一个文件，用户觉得很难受。
+      现在改为**纯内存**记录。
+
+    ★ 看门狗的能力没有被削弱：`_dump_hang` 需要的 `_BEACON["label"]`
+      （「最后一次进展是什么」）和 `_BEACON["t"]`（多久没动静）都在内存里，
+      一样能判断卡在哪一步、并打出主线程调用栈（走 stderr + 弹窗）。
+      丢掉的只是「用户强退后还能从文件里回看进度」这一点 —— 用户明确不要。
     """
     _BEACON["label"] = label
     _BEACON["t"] = time.time()
-    try:
-        p = Path.home() / "Desktop" / "XYXBot-诊断.txt"
-        with open(p, "a", encoding="utf-8") as f:
-            from datetime import datetime
 
-            f.write(f"[{datetime.now():%H:%M:%S}] 启动进度：{label}\n")
+
+def _cleanup_legacy_diag_files() -> None:
+    """删掉旧版本遗留在桌面的诊断文件（2026-10-04 起不再生成）。
+
+    ★ 为什么需要这一步：光把「写文件」的代码删掉**不会**清走用户机器上
+      已经存在的那份 —— 用户升级到新版本后，桌面那个文件会一直躺在那儿，
+      看起来就像功能没删干净。这里在启动时顺手清一次，一次生效、幂等。
+    """
+    try:
+        for name in ("XYXBot-诊断.txt",):
+            stale = Path.home() / "Desktop" / name
+            if stale.exists():
+                stale.unlink()
     except Exception:
         pass
 
@@ -296,7 +289,7 @@ def _beacon(label: str) -> None:
 def _arm_watchdog() -> None:
     global _WATCHDOG_ON
     _WATCHDOG_ON = True
-    _beacon("等待登录")
+    _beacon("启动流程开始")
 
 
 def _disarm_watchdog() -> None:
@@ -305,7 +298,7 @@ def _disarm_watchdog() -> None:
 
 
 def _dump_hang(idle: float, why: str = "主线程停滞") -> None:
-    """把主线程卡在哪一行写进日志。"""
+    """把「主线程卡在哪一行」打到 stderr（**不落盘**，2026-10-04 起）。"""
     frames = sys._current_frames()
     main_id = threading.main_thread().ident
     lines = [
@@ -362,6 +355,12 @@ def main() -> None:
         pass
     try:
         _install_startup_watchdog()
+    except Exception:
+        pass
+    # ★ 清掉旧版本遗留的诊断文件（2026-10-04 起不再生成，顺手清理一次）
+    #   放在 --selftest 之前：CI 上也会走一遍，保证幂等且无副作用
+    try:
+        _cleanup_legacy_diag_files()
     except Exception:
         pass
 

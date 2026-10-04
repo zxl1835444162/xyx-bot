@@ -487,9 +487,17 @@ macOS 的 Tk 对尺寸变化特别敏感（每次重绘都会再发一个 Config
 如果窗口还是不出来，现场在：
 
 ```bash
-cat ~/Library/Application\ Support/XYXBot/artifacts/logs/fatal.log
-cat ~/Desktop/XYXBot-诊断.txt          # 启动进度 trail + 卡死时的主线程栈
+/Applications/XYXBot.app/Contents/MacOS/XYXBot --selftest --window
 ```
+
+★ **2026-10-04 起不再生成任何诊断文件**（用户要求：每次启动都往桌面丢一个
+`XYXBot-诊断.txt`，很难受）。原先那两个位置 ——
+`~/Library/Application Support/XYXBot/artifacts/logs/fatal.log` 和桌面那份 ——
+**都已取消**，程序启动时还会顺手把桌面上遗留的旧文件删掉一次。
+
+排障信息改走两条路：
+1. **stderr**（在终端里跑 `--selftest --window` 时直接可见）
+2. **弹窗**（打包版启动失败/界面抛异常时会弹出错误框）
 
 ---
 
