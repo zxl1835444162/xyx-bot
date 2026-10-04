@@ -12,6 +12,7 @@ import os
 import sys
 import threading
 import time
+import tkinter as tk
 import traceback
 from pathlib import Path
 
@@ -57,10 +58,16 @@ def _show_fatal(err: str) -> None:
         import tkinter as tk
         from tkinter import messagebox
 
-        root = tk.Tk()
+        # ★ 复用已有的 root。macOS 上**多建一个 tk.Tk()** 会让后面的窗口
+        #   收不到事件（本项目真正的 bug），所以这里绝不无脑新建。
+        root = getattr(tk, "_default_root", None)
+        own_root = root is None
+        if root is None:
+            root = tk.Tk()
         root.withdraw()
         messagebox.showerror("启动失败", err[:2000])
-        root.destroy()
+        if own_root:
+            root.destroy()
     except Exception:
         try:
             input("启动失败，按回车退出...")
@@ -131,115 +138,113 @@ def _install_error_handler() -> None:
     tk.Tk.report_callback_exception = _hook
 
 
-def _login_once() -> str | None:
-    """显示登录窗，返回用户名；用户直接关窗则返回 None。
-
-    ★★ 这里必须**平级**调用 mainloop()，绝不能嵌套 —— 见 `run_app` 的说明。
-    """
-    from ui.login_window import LoginWindow
-
-    box: dict = {}
-    _beacon("创建登录窗")
-    lw = LoginWindow(on_success=lambda u: box.setdefault("user", u))
-    _beacon("登录窗已显示，等待输入")
-    lw.mainloop()
-    try:
-        lw.destroy()
-    except Exception:
-        pass
-    return box.get("user")
-
-
 def run_app() -> int:
-    """★★ 顶层循环：登录窗 → 主界面（可来回切换）。
+    """★★ 单 root + 可切换窗口：登录 ⇄ 主界面。
 
-    ★★★ 为什么必须写成这样一个"平级循环"（2026-10-04，真机复现）
+    ★★★ 为什么必须是"单 root"（2026-10-04，真机复现，这是真正的根因）
     =====================================================================
 
     用户（macOS 15）反馈：登录界面正常，点确定之后**登录窗消失、
     鼠标一直转圈、主界面永远不出来、没有任何报错**。
 
-    老代码是这样的：
+    "转圈"= 主线程被卡住。用 `tests/repro_login.py` 的看门狗在
+    **真 macOS runner** 上抓到的现场：
 
-        def main():
-            LoginWindow(on_success=launch_main).mainloop()      # root #1
-        def launch_main(username):
-            MainWindow(username=username, ...).mainloop()       # root #2
-        def back_to_login():
-            LoginWindow(on_success=launch_main).mainloop()      # root #3 …
+        ★ 卡死了：主线程已 20.4 秒没有任何进展
+           最后一次进展：MainWindow.__init__ 结束   ← 窗口**已经建好了**
+           平台：darwin
+        --- 主线程调用栈 ---
+           File "run_gui.py", line 230, in run_app   ← 卡在它的 mainloop()
 
-    而 `launch_main` 是**从 root #1 的 mainloop 回调里**被调用的
-    （`LoginWindow._enter`）。于是实际发生的是：
+    也就是说：主窗口对象建出来了，**它的 `mainloop()` 却收不到任何事件**
+    （窗口不绘制、`after` 定时器永不触发）。而**第 1 个 root（登录窗）的
+    `after` 回调是正常触发的** —— 对比之下结论很明确：
 
-        root1.mainloop()            ← 还在栈上
-          └─ 回调 _enter
-               ├─ root1.destroy()
-               └─ root2.mainloop()   ← **嵌套**在里面，而且 root1 已经没了
+        在 macOS 上，一个进程里**第 2 个 `tk.Tk()` 的事件循环是不工作的**。
+        Windows 的 Tk 扛得住，所以这个 bug 只在 mac 上出现，
+        "登录可以、主界面不行"也正好由此解释（主界面要新建第 2 个 root）。
 
-    Windows 的 Tk 勉强能扛过去；**macOS 的 Aqua Tk 扛不住**：
-    root #2 从此收不到任何事件 —— 窗口不绘制、`after` 定时器不触发、
-    鼠标一直转圈，而且**不抛异常**，所以既没有弹窗也没有日志。
+    试过的错路（都记下来，避免以后再走）：
+      * 以为要避免"`mainloop` 嵌套"→ 改成顶层平级调用，**仍然卡**；
+        因为问题不在嵌套，而在"第 2 个 root"本身。
+      * 以为中文 locale 导致字体反复枚举 → 真机上 500 次调用只花 0.4ms，
+        族名也不会被本地化。**那条推断是错的。**
 
-    更坑的是它解释了"登录可以、主界面不行"：登录窗只有 12 个控件，
-    还在 root #1 里画得好好的；主界面要新建 root #2 才出事。
-
-    实测证据（GitHub 的 macOS runner，真机）：
-        ★ 卡死了：主线程已 10.4 秒没有任何进展
-           最后一次进展：MainWindow.__init__ 结束     ← 窗口建好了
-           平台：darwin                                ← 然后 mainloop 死了
-
-    改法：**所有 `mainloop()` 都在这一层平级调用**。
-    登录成功时 `LoginWindow._enter` 只 `quit()` 让 root #1 的 mainloop
-    正常返回；这里拿到用户名、销毁 root #1，再建 root #2、再 mainloop。
-    这样永远不会出现"mainloop 里套 mainloop"。
+    正确做法：**整个程序只建一个 `tk.Tk()`**（这里建，`withdraw()` 当宿主），
+    登录窗和主界面都是它的 `tk.Toplevel`。切换窗口就是销毁一个 Toplevel、
+    再建另一个 —— 始终只有一个解释器、一个事件循环。
 
     Returns:
         进程退出码
     """
+    from ui.login_window import LoginWindow
     from ui.main_window import MainWindow
 
-    while True:
-        # ---- 登录 ----
-        _arm_watchdog()
-        user = _login_once()
-        if not user:
-            return 0                      # 用户关了登录窗
+    # ★★ 全进程唯一的 Tk root：只当事件循环宿主，自己不显示
+    root = tk.Tk()
+    root.withdraw()
 
-        # ---- 主界面 ----
-        _beacon("开始创建主界面 MainWindow")
-        flag: dict = {}
+    st = {"done": False, "error": False}
+    win: dict = {"main": None, "login": None}
 
-        def _want_relogin() -> None:
-            """主界面点了「退出登录」：只作标记并退出事件循环。"""
-            flag["relogin"] = True
-            try:
-                win.quit()                # ★ 不要在这里新建窗口/Mainloop
-            except Exception:
-                pass
-
+    def _stop() -> None:
+        """结束事件循环（程序退出）。"""
+        st["done"] = True
         try:
-            win = MainWindow(username=user, on_logout=_want_relogin)
-        except Exception:
-            _beacon("主界面创建失败")
-            _show_fatal("主界面启动失败：\n\n" + traceback.format_exc())
-            return 1
-        _beacon("主界面已创建，进入事件循环")
-        # ★ 主界面起来了 —— 之后主线程停在 mainloop 里是**正常**的，撤掉看门狗
-        _disarm_watchdog()
-        try:
-            win.mainloop()
-        except Exception:
-            _show_fatal("主界面运行失败：\n\n" + traceback.format_exc())
-            return 1
-        try:
-            win.destroy()
+            root.quit()
         except Exception:
             pass
 
-        if not flag.get("relogin"):
-            return 0                      # 正常关窗，退出整个程序
+    def _drop(key: str) -> None:
+        w = win.get(key)
+        win[key] = None
+        if w is not None:
+            try:
+                w.destroy()
+            except Exception:
+                pass
+
+    def _open_main(user: str) -> None:
+        _beacon("开始创建主界面 MainWindow")
+        try:
+            mw = MainWindow(root, username=user,
+                            on_logout=_on_logout, on_quit=_stop)
+        except Exception:
+            _beacon("主界面创建失败")
+            st["error"] = True
+            _show_fatal("主界面启动失败：\n\n" + traceback.format_exc())
+            _stop()
+            return
+        win["main"] = mw
+        _beacon("主界面已创建，事件循环在跑")
+        _disarm_watchdog()
+
+    def _on_logout() -> None:
+        """主界面点「退出登录」→ 关掉主界面，回到登录窗（不退出程序）。"""
         _beacon("回到登录窗")
-        # 回到 while 顶部重新走登录流程（同样不嵌套）
+        win["main"] = None          # _teardown 里已经 destroy 过了
+        _open_login()
+
+    def _open_login() -> None:
+        _arm_watchdog()
+        _beacon("创建登录窗")
+
+        def _ok(user: str) -> None:
+            _drop("login")
+            _open_main(user)
+
+        def _cancel() -> None:
+            _beacon("用户关闭了登录窗")
+            _drop("login")
+            _stop()
+
+        win["login"] = LoginWindow(root, on_success=_ok, on_cancel=_cancel)
+        _beacon("登录窗已显示，等待输入")
+
+    _open_login()
+    # ★ 全进程只调用这一次 mainloop（在唯一的 root 上）
+    root.mainloop()
+    return 1 if st["error"] else 0
 
 
 # ================================================================ 启动看门狗

@@ -154,11 +154,20 @@ print("\n=== D. 静态检查：顶层流程不能再裸奔 ===")
 _rg = (ROOT / "run_gui.py").read_text(encoding="utf-8")
 check_true("主界面启动失败会弹出来（不静默）", "主界面启动失败" in _rg)
 check_true("main() 里先装异常处理器再建窗口",
-           _rg.index("_install_error_handler()") < _rg.index("_login_once()"))
+           _rg.index("_install_error_handler()") < _rg.index("run_app()"))
 check_true("--selftest 默认连界面一起冒烟",
            'want_ui = "--no-ui" not in sys.argv' in _rg)
-check_true("有顶层循环 run_app（所有 mainloop 平级调用）",
-           "def run_app(" in _rg)
+check_true("有顶层循环 run_app", "def run_app(" in _rg)
+check_true("★ run_app 里建唯一的 Tk root，并把它传给两个窗口",
+           "root = tk.Tk()" in _rg and "LoginWindow(root," in _rg
+           and "MainWindow(root," in _rg)
+check_true("其他地方要用 root 时是**复用**而不是新建",
+           'getattr(tk, "_default_root", None)' in _rg)
+check_true("两个窗口都是 Toplevel（不是各自建 Tk root）",
+           "class LoginWindow(tk.Toplevel)" in (
+               ROOT / "ui" / "login_window.py").read_text(encoding="utf-8")
+           and "tk.Toplevel)" in (
+               ROOT / "ui" / "main_window.py").read_text(encoding="utf-8"))
 _sel = (ROOT / "src" / "selftest.py").read_text(encoding="utf-8")
 check_true("冒烟里会真的去建登录窗（复现用户那条路）",
            "LoginWindow(" in _sel)
@@ -169,8 +178,8 @@ check_true("探测有兜底超时（after(ms + 3000, ...)），不会死等",
            "ms + 3000" in _sel)
 # ★★ 但事件循环探测在 GitHub 的 macOS runner 上会**永久卡住**（实测踩过：
 #    两个 job 卡了 8 分钟以上只能手动取消），所以必须在 CI 里自动关闭。
-check_true("窗口探测在 CI 环境自动关闭（检测 CI 环境变量）",
-           "os.getenv(\"CI\")" in _sel and "_window_probe_wanted" in _sel)
+check_true("窗口探测默认关闭（macOS 上多次 mainloop 不可靠）",
+           "_window_probe_wanted" in _sel and "return v in (\"1\"" in _sel)
 check_true("可以用 XYX_SELFTEST_WINDOW 显式开关",
            "XYX_SELFTEST_WINDOW" in _sel)
 check_true("默认冒烟会 withdraw（不映射窗口，任何环境都安全）",

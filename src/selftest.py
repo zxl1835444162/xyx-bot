@@ -269,31 +269,25 @@ def _visible(res: dict) -> tuple:
 def _window_probe_wanted() -> bool:
     """要不要做「窗口真的显示出来了吗」的探测（会跑事件循环）。
 
-    ★★ 为什么必须能在自动化环境里关掉（2026-10-04 实测踩坑）
+    ★ 默认**关闭**，只有显式要求（`XYX_SELFTEST_WINDOW=1` 或 `--window`）才做。
     =====================================================================
-    这个探测要跑真实 `mainloop()` 并且让窗口真的映射到屏幕。实测在
-    **GitHub 的 macOS runner** 上会**永久卡住**（两个 job 都卡在包内自检
-    那一步，跑了 8 分钟以上只能手动取消）—— 那种 runner 虽然
-    `tk.Tk()` 能建出来（`--selftest` 报「图形会话可用」），但**没有真正的
-    登录会话去显示窗口**，于是 `after` 定时器永远不触发，`quit()` 也就
-    永远等不到。
 
-    而用户自己的 Mac 有真实桌面会话，这个探测是**最关键的诊断**
-    （「主界面出不来」很可能就是窗口建好了但没显示）。
+    原因（2026-10-04 实测，两次踩坑）：
 
-    所以规则：
-      * `XYX_SELFTEST_WINDOW=1/0` 显式指定，优先级最高
-      * 否则：检测到 `CI` 环境变量（GitHub 等自动化会自动设置）→ **关**
-      * 否则（用户手动跑）→ **开**
+    ① 这个探测要跑真实 `mainloop()` 并让窗口映射到屏幕。在 **GitHub 的 macOS
+       runner** 上会**永久卡住** —— tests 的 macos job 与 build-macos 的两个
+       job 全都卡在包内自检那一步，跑了 8 分钟以上只能手动取消。
+
+    ② 更关键的是：这个探测需要在同一个进程里跑**多次** `mainloop()`。
+       而 macOS 上**第二次 `mainloop()`（以及第 2 个 `tk.Tk()`）的行为本来就
+       不可靠** —— 它会假报"窗口没显示"，把排查方向带偏。
+       （这正是本项目真正的 bug：见 `run_gui.run_app` 的说明。
+        后来定位靠的是"只跑一次真实 mainloop"的 `tests/repro_login.py`。）
+
+    所以这里保持关闭；要人工确认窗口能否显示时再加 `--window`。
     """
     v = os.getenv("XYX_SELFTEST_WINDOW", "").strip().lower()
-    if v in ("1", "true", "yes", "on"):
-        return True
-    if v in ("0", "false", "no", "off"):
-        return False
-    if os.getenv("CI"):
-        return False
-    return True
+    return v in ("1", "true", "yes", "on")
 
 
 def smoke_main_window(verbose: bool = True,
@@ -343,6 +337,17 @@ def smoke_main_window(verbose: bool = True,
         window_probe = _window_probe_wanted()
     n_steps = 3 if window_probe else 2
 
+    # ★★★ 只建**一个** Tk root，登录窗/主界面都是它的 Toplevel。
+    #     这和 `run_gui.run_app` 的真实结构一致 —— 也是 macOS 上唯一能用的结构：
+    #     在 macOS 上，一个进程里第 2 个 `tk.Tk()` 的事件循环收不到任何事件
+    #     （窗口不绘制、after 不触发、不抛异常）。冒烟测试必须复现真实结构，
+    #     否则它"通过"也说明不了什么。
+    #     （tkinter 在函数内 import：没装 tkinter 的环境也能用这个模块做环境检查）
+    import tkinter as tk
+
+    root = tk.Tk()
+    root.withdraw()
+
     rc = 0
 
     # ---- [1] 构造主窗口 + 构建所有页面（不显示窗口，任何环境都安全）----
@@ -350,7 +355,7 @@ def smoke_main_window(verbose: bool = True,
     try:
         from ui.main_window import MainWindow
 
-        win = MainWindow(username="selftest")
+        win = MainWindow(root, username="selftest")
         win.withdraw()          # ★ 不映射窗口：CI 上映射会卡死
         pages = ("run", "setup", "more", "overview", "account",
                  "books", "tasks", "settings", "about")
@@ -383,7 +388,7 @@ def smoke_main_window(verbose: bool = True,
         try:
             from ui.main_window import MainWindow
 
-            win = MainWindow(username="selftest")
+            win = MainWindow(root, username="selftest")
             probe = _probe_window(win)
             shown, why = _visible(probe)
             if shown:
@@ -413,7 +418,7 @@ def smoke_main_window(verbose: bool = True,
         from ui.login_window import LoginWindow
         from ui.main_window import MainWindow
 
-        lw = LoginWindow(on_success=lambda u: None)
+        lw = LoginWindow(root, on_success=lambda u: None)
         if window_probe:
             p1 = _probe_window(lw)
             s1, w1 = _visible(p1)
@@ -423,7 +428,7 @@ def smoke_main_window(verbose: bool = True,
             s1, w1 = True, "（未做显示探测）"
         lw.destroy()
 
-        win2 = MainWindow(username="selftest")
+        win2 = MainWindow(root, username="selftest")
         if window_probe:
             p2 = _probe_window(win2)
             s2, w2 = _visible(p2)
@@ -448,6 +453,10 @@ def smoke_main_window(verbose: bool = True,
         for line in traceback.format_exc().splitlines():
             _out("           " + line)
 
+    try:
+        root.destroy()
+    except Exception:
+        pass
     return rc
 
 

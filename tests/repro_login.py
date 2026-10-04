@@ -75,15 +75,12 @@ def check_true(name: str, cond, detail: str = ""):
 
 
 # ---------------------------------------------------------------- 有没有图形会话
-try:
-    import tkinter as tk
-
-    _r = tk.Tk()
-    _r.withdraw()
-    _r.destroy()
-except Exception as e:
+# ★ 不要在正式跑之前先建一个临时 root —— macOS 上"多建 root / 多跑 mainloop"
+#   本身就是不可靠的，探测工具自己不能变成干扰源。
+if sys.platform.startswith("linux") and not (
+        os.getenv("DISPLAY") or os.getenv("WAYLAND_DISPLAY")):
     print("\n" + "=" * 64)
-    print(f"  SKIP：本环境没有可用的窗口服务器（{type(e).__name__}）")
+    print("  SKIP：本环境没有 DISPLAY（Linux headless）")
     print("=" * 64)
     sys.stdout.flush()
     os._exit(0)
@@ -246,22 +243,14 @@ check_true("★ 主窗口的事件循环真的在跑（after 回调被触发）"
 check_true("看门狗没有报卡死", not HUNG["yes"])
 
 _rg = (ROOT / "run_gui.py").read_text(encoding="utf-8")
-print("\n  --- 结构检查（防止有人把嵌套 mainloop 写回来）---")
-check_true("run_gui 有顶层循环 run_app", "def run_app(" in _rg)
-check_true("登录窗的 mainloop 在顶层调用（_login_once 里）",
-           "def _login_once(" in _rg and "lw.mainloop()" in _rg)
-check_true("run_app 里平级调用 MainWindow 的 mainloop",
-           "win.mainloop()" in _rg)
-_lw = (ROOT / "ui" / "login_window.py").read_text(encoding="utf-8")
-check_true("LoginWindow._enter 不再自己 destroy 登录窗",
-           "self.destroy()\n        self._on_success" not in _lw)
-check_true("LoginWindow._enter 用 quit() 让事件循环正常返回",
-           "self.quit()" in _lw)
-# 全局扫一遍：mainloop 只应该在顶层出现。
-# ★ 用 AST 找真正的调用节点 —— 直接扫文本会把 docstring 里的示例代码也算进去，
-#   而且 Windows 下路径是反斜杠，startswith("ui/") 会误判（我第一版就这么错的）。
+print("\n  --- 结构检查（防止退回「多个 Tk root / 多次 mainloop」）---")
+check_true("run_gui 有顶层流程 run_app", "def run_app(" in _rg)
+# ★★ 核心不变量：全进程只建一个 Tk root、只跑一次 mainloop。
+#    用 AST 找真正的调用节点 —— 扫文本会把 docstring 里的示例代码也算进去，
+#    而且 Windows 下路径是反斜杠，startswith("ui/") 会误判（我第一版就这么错的）。
 import ast  # noqa: E402
 
+_tk_calls: list = []
 _mainloops: list = []
 for p in list((ROOT / "ui").rglob("*.py")) + [ROOT / "run_gui.py",
                                               ROOT / "main.py"]:
@@ -269,16 +258,65 @@ for p in list((ROOT / "ui").rglob("*.py")) + [ROOT / "run_gui.py",
         tree = ast.parse(p.read_text(encoding="utf-8"))
     except SyntaxError:
         continue
+    rel = p.relative_to(ROOT).as_posix()
     for node in ast.walk(tree):
-        if (isinstance(node, ast.Call)
-                and isinstance(node.func, ast.Attribute)
-                and node.func.attr == "mainloop"):
-            _mainloops.append(
-                f"{p.relative_to(ROOT).as_posix()}:{node.lineno}")
-check("mainloop() 只在 run_gui.py 顶层出现（ui/ 里不许有）", len(_mainloops), 2)
-check_true("两处都在 run_gui.py（_login_once 与 run_app）",
-           all(m.startswith("run_gui.py:") for m in _mainloops),
+        if not isinstance(node, ast.Call):
+            continue
+        f = node.func
+        if isinstance(f, ast.Attribute) and f.attr == "mainloop":
+            _mainloops.append(f"{rel}:{node.lineno}")
+        if (isinstance(f, ast.Attribute) and f.attr == "Tk"
+                and isinstance(f.value, ast.Name) and f.value.id == "tk"):
+            _tk_calls.append(f"{rel}:{node.lineno}")
+
+check("★ 全进程只跑一次 mainloop()", len(_mainloops), 1)
+check_true("那次 mainloop 在 run_gui.py（顶层）",
+           _mainloops and _mainloops[0].startswith("run_gui.py:"),
            str(_mainloops))
+_tk_in_rg = [x for x in _tk_calls if x.startswith("run_gui.py:")]
+_tk_in_ui = [x for x in _tk_calls if x.startswith("ui/")]
+
+# ★ 判据不是"数够不够"，而是：**除了 run_app 里那唯一一次**，
+#   其它每一处 tk.Tk() 都必须被守卫着（复用已有 root，或走 master=None 兼容）。
+_GUARDS = ("if master is None:", "_default_root")
+
+
+def _guarded(rel: str, lineno) -> bool:
+    lineno = int(lineno)          # ★ 从 "文件:行号" 拆出来的行号是字符串
+    lines = (ROOT / rel).read_text(encoding="utf-8").splitlines()
+    return any(any(g in lines[j] for g in _GUARDS)
+               for j in range(max(0, lineno - 9), lineno - 1))
+
+
+_unguarded = [x for x in _tk_calls if not _guarded(*x.split(":"))]
+check("★ 只有 run_app 那一处是无条件建 root（其余都必须复用/守卫）",
+      len(_unguarded), 1)
+check_true(f"唯一那处就在 run_app 里（{_unguarded}）",
+           bool(_unguarded) and _unguarded[0].startswith("run_gui.py:"),
+           str(_unguarded))
+check_true("run_app 里确实建了 root（且是那句 root = tk.Tk()）",
+           "root = tk.Tk()" in _rg)
+check_true("_show_fatal 复用已有 root，不无脑新建",
+           'getattr(tk, "_default_root", None)' in _rg)
+check_true("run_gui 把同一个 root 传给两个窗口",
+           "LoginWindow(root," in _rg and "MainWindow(root," in _rg)
+
+# 两个窗口都必须是 Toplevel（不是 Tk）
+from ui.login_window import LoginWindow  # noqa: E402
+from ui.main_window import MainWindow  # noqa: E402
+import tkinter as tk  # noqa: E402
+
+check_true("LoginWindow 是 tk.Toplevel 子类（不是 tk.Tk）",
+           issubclass(LoginWindow, tk.Toplevel)
+           and not issubclass(LoginWindow, tk.Tk))
+check_true("MainWindow 是 tk.Toplevel 子类（不是 tk.Tk）",
+           issubclass(MainWindow, tk.Toplevel)
+           and not issubclass(MainWindow, tk.Tk))
+check_true("两个窗口都能接收共享 root（master 参数）",
+           "master=None" in (ROOT / "ui" / "login_window.py").read_text(
+               encoding="utf-8")
+           and "master=None" in (ROOT / "ui" / "main_window.py").read_text(
+               encoding="utf-8"))
 
 print(f"\n  字体解析调用 {font_calls['n']} 次，"
       f"枚举 {theme._FONT_DIAG.get('families_ms')} ms / "

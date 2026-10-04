@@ -35,12 +35,46 @@ HIGHLIGHTS = [
 ]
 
 
-class LoginWindow(tk.Tk):
-    """登录窗口。成功后调用 on_success(username)。"""
+class LoginWindow(tk.Toplevel):
+    """登录窗口。成功后调用 on_success(username)。
 
-    def __init__(self, on_success: Callable[[str], None],
+    ★★★ 为什么是 `tk.Toplevel` 而不是 `tk.Tk`（2026-10-04，真机复现）
+    =====================================================================
+
+    在 macOS 上，**一个进程里第 2 个 `tk.Tk()` 的 `mainloop()` 收不到任何事件**：
+    窗口不绘制、`after` 定时器不触发、鼠标一直转圈，而且**不抛异常** ——
+    所以既没有弹窗也没有日志。用户在 mac 上看到的就是「点登录后登录窗没了、
+    鼠标转圈、主界面永远不出来」。
+
+    实测（GitHub 的 macOS runner，真机）：
+        ★ 卡死了：主线程已 20.4 秒没有任何进展
+           最后一次进展：MainWindow.__init__ 结束   ← 第 2 个 root 已经建好
+           平台：darwin                              ← 它的 mainloop 却不工作
+        而**第 1 个 root（登录窗）的 after(900) 是正常触发的**。
+
+    所以规则是：**整个程序只能有一个 `tk.Tk()`**。
+    由 `run_gui.run_app` 建一次并 `withdraw()` 当事件循环宿主；
+    登录窗和主界面都是它的 `Toplevel` —— 共享同一个解释器、同一个事件循环。
+    切换窗口 = 销毁一个 Toplevel + 建另一个，永远不会出现"第 2 个 root"。
+
+    `master=None` 时（单独用/单元测试）会自动建一个自己的 Tk root，
+    这样 `LoginWindow(on_success=...)` 这种老写法也不会报错。
+    """
+
+    def __init__(self, master=None,
+                 on_success: Optional[Callable[[str], None]] = None,
                  on_cancel: Optional[Callable[[], None]] = None):
-        super().__init__()
+        # ★ 兼容老写法：不传 master 就自己建一个 root（并藏起来）
+        if master is None:
+            master = tk.Tk()
+            try:
+                master.withdraw()
+            except Exception:
+                pass
+            self._owns_root = True
+        else:
+            self._owns_root = False
+        super().__init__(master)
         self._on_success = on_success
         self._on_cancel = on_cancel
 
@@ -279,41 +313,15 @@ class LoginWindow(tk.Tk):
             self.hint_label.configure(text="")
 
     def _enter(self, user: str):
-        """登录成功：**只报告结果并退出事件循环**，绝不在这里建新窗口。
+        """登录成功：**只把结果交出去**，窗口的销毁/切换由外层负责。
 
-        ★★★ 这是 macOS 上「点登录后鼠标转圈、主界面永远不出来」的根因
-        =====================================================================
-
-        原来这里写的是：
-
-            self.destroy()          # 销毁登录窗（root #1）
-            self._on_success(user)  # → 建 root #2，并调用 root2.mainloop()
-
-        而这段代码本身跑在 **root #1 的 mainloop 回调里**，于是变成：
-
-            root1.mainloop()            ← 还在栈上
-              └─ 回调 _enter
-                   ├─ root1.destroy()
-                   └─ root2.mainloop()   ← **嵌套**在里面，且 root1 已销毁
-
-        Windows 的 Tk 能扛；**macOS 的 Aqua Tk 扛不住** —— root #2 从此收不到
-        任何事件：窗口不绘制、`after` 定时器不触发、鼠标一直转圈，
-        而且**不抛异常**，所以既没弹窗也没日志。
-
-        实测（GitHub 的 macOS runner，真机）：
-            ★ 卡死了：主线程已 10.4 秒没有任何进展
-               最后一次进展：MainWindow.__init__ 结束   ← 窗口建好了
-               平台：darwin                              ← 然后 mainloop 死了
-
-        正确做法：这里只把结果交出去 + `quit()` 让 root #1 的 mainloop
-        正常返回；由 `run_gui.run_app` 在外层**平级地**再建 root #2。
-        销毁登录窗也交给外层（`run_app` 在 mainloop 返回后才 destroy）。
+        ★ 这里以前是 `self.destroy()` + `self._on_success(user)`，而
+          `_on_success` 会去建**第 2 个 `tk.Tk()` root** —— 在 macOS 上
+          第 2 个 root 的事件循环是不工作的（详见类 docstring 的实测）。
+          现在改成：只回调，由 `run_gui.run_app` 用同一个 root 换窗口。
         """
-        self._on_success(user)
-        try:
-            self.quit()
-        except Exception:
-            pass
+        if self._on_success:
+            self._on_success(user)
 
     def _close(self):
         if self._on_cancel:

@@ -32,7 +32,7 @@ from .theme import (COLOR, F, BrandButton, CheckBox, GradientBar, LogView,
 
 class MainWindow(AboutPage, AccountPage, AiFlowMixin, BooksPage,
                  ChaptersMixin, ConfigIOMixin, MorePage, OverviewPage,
-                 RunMixin, SettingsPage, SetupMixin, TasksPage, tk.Tk):
+                 RunMixin, SettingsPage, SetupMixin, TasksPage, tk.Toplevel):
     """主窗口。
 
     ★ 架构改良（阶段二）：页面构建与业务动作已按「一页/一块一模块」拆到
@@ -45,13 +45,44 @@ class MainWindow(AboutPage, AccountPage, AiFlowMixin, BooksPage,
     「构建一次、之后只显示/隐藏」—— 后者修掉了两个真实缺陷：
       ① 切页会丢掉没保存的编辑（模板/细纲都是从 workspace.json 回填的）；
       ② 后台任务回调里持有的按钮引用会变成已销毁控件（报 TclError）。
+
+    ★★★ 为什么是 `tk.Toplevel` 而不是 `tk.Tk`（2026-10-04，真机复现）
+    =====================================================================
+    在 macOS 上，**一个进程里第 2 个 `tk.Tk()` 的 `mainloop()` 收不到任何
+    事件**：窗口不绘制、`after` 定时器不触发、鼠标一直转圈，而且不抛异常。
+    用户看到的就是「点登录后登录窗消失、鼠标转圈、主界面永远不出来」。
+
+    实测（GitHub 的 macOS runner）：
+        ★ 卡死了：主线程已 20.4 秒没有任何进展
+           最后一次进展：MainWindow.__init__ 结束   ← 窗口建好了
+           平台：darwin                              ← 它的 mainloop 不工作
+        而第 1 个 root（登录窗）的 after 回调是正常触发的。
+
+    所以整个程序只允许一个 `tk.Tk()`（由 `run_gui.run_app` 建并 withdraw
+    当宿主），登录窗/主界面都是它的 Toplevel。
+    `master=None` 时自动建一个自己的 root，兼容单独使用与单元测试。
     """
 
-    def __init__(self, username: str = "用户",
-                 on_logout: Optional[Callable[[], None]] = None):
-        super().__init__()
+    def __init__(self, master=None, username: str = "用户",
+                 on_logout: Optional[Callable[[], None]] = None,
+                 on_quit: Optional[Callable[[], None]] = None):
+        # ★ 兼容老写法：不传 master 就自己建一个 root（并藏起来）
+        if master is None:
+            master = tk.Tk()
+            try:
+                master.withdraw()
+            except Exception:
+                pass
+            self._owns_root = True
+        else:
+            self._owns_root = False
+        super().__init__(master)
         self._username = username
         self._on_logout = on_logout
+        # ★ 用户点关闭按钮时通知外层（外层负责结束事件循环）。
+        #   没有它的话，单 root 架构下关掉主界面后事件循环还在跑，
+        #   程序会变成一个"看不见却活着"的进程。
+        self._on_quit = on_quit
         self._app = None          # 自动化 App 实例（懒启动）
         self._current = DEFAULT_PAGE
         self._nav_buttons: dict[str, NavItem] = {}
@@ -730,14 +761,17 @@ class MainWindow(AboutPage, AccountPage, AiFlowMixin, BooksPage,
     def log(self, msg: str, level: str = "info"):
         self.log_view.log(msg, level)
 
-    def _on_window_close(self):
-        """★ 关窗清理：先把浏览器关掉，再销毁窗口。
-
-        ★ 根因修复：原来既没有 `WM_DELETE_WINDOW` 绑定，`_logout` 也不调
-          `App.stop()` → 直接关窗会**残留 Playwright 浏览器进程**。
+    def _teardown(self, *, closing: bool):
+        """★ 关窗 / 退登**共用**的清理：先落盘，再关浏览器，最后销毁并通知外层。
 
         ★ 2026-10-04：关窗前把「该记住的东西」落盘 —— 窗口大小/位置 +
           界面配置 + 小说轻量记忆（细纲）。否则用户填完细纲直接关窗就丢了。
+
+        ★ 根因修复（更早）：原来既没有 `WM_DELETE_WINDOW` 绑定，`_logout` 也不调
+          `App.stop()` → 直接关窗会**残留 Playwright 浏览器进程**。
+
+        Args:
+            closing: True = 用户关窗（要退出程序）；False = 退出登录（回登录窗）。
         """
         # ① 先存（此时控件还在，能读到值）
         try:
@@ -758,15 +792,30 @@ class MainWindow(AboutPage, AccountPage, AiFlowMixin, BooksPage,
             self._stop_app()
         except Exception:
             pass
+        # ③ 销毁窗口
         try:
             self.destroy()
         except Exception:
             pass
+        # ④ 通知外层（★ 单 root 架构下这一步是必须的：窗口都没了，
+        #    事件循环还活着的话程序就变成"看不见却活着"）
+        try:
+            if closing:
+                if self._on_quit:
+                    self._on_quit()
+            else:
+                if self._on_logout:
+                    self._on_logout()
+        except Exception:
+            pass
+
+    def _on_window_close(self):
+        """用户点了窗口关闭按钮（红叉）→ 清理并退出程序。"""
+        self._teardown(closing=True)
 
     def _logout(self):
-        self._on_window_close()
-        if self._on_logout:
-            self._on_logout()
+        """点了「退出登录」→ 清理并回到登录窗（**不退出程序**）。"""
+        self._teardown(closing=False)
 
 
 # ================================================================ 组件
