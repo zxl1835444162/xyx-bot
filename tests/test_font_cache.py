@@ -212,9 +212,17 @@ try:
     for k in ("ui", "mono", "ui_matched", "mono_matched", "platform",
               "system_family_count", "families_ms", "picked"):
         check_true(f"font_report 含 {k}", k in rep, str(rep))
-    check("报告里的系统字体数正确", rep["system_family_count"], 2)
-    check_true("报告里说清了有没有命中候选（便于远程排查）",
-               rep["ui_matched"] is True, str(rep))
+    if rep.get("deferred_no_root"):
+        # ★ 没有图形会话（Linux headless）时，字体表是"未定稿"的：
+        #   这时不该要求它报出字体数，而要确认它**如实说了自己是未定稿**，
+        #   并且没有把空表钉进缓存（否则以后有 root 也不会再解析）。
+        check_true("无 root 时如实报告「未定稿」", rep["deferred_no_root"] is True)
+        check_true("无 root 时不毒化缓存（_SYS_FAMILIES 仍为 None）",
+                   theme._SYS_FAMILIES is None)
+    else:
+        check("报告里的系统字体数正确", rep["system_family_count"], 2)
+        check_true("报告里说清了有没有命中候选（便于远程排查）",
+                   rep["ui_matched"] is True, str(rep))
     check_true("报告里给出了实际用的字体名",
                isinstance(rep["ui"], str) and rep["ui"], str(rep["ui"]))
 

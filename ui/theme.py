@@ -320,11 +320,16 @@ def font_report() -> dict:
     ★ `tkfont.families()` 需要存在一个 Tk root 才能拿到真表；没有就临时
       建一个再销毁（否则报告出来的全是 "?" / None，等于没报）。
     """
+    # ★ 建 root 与解析要分成两步：建不出 root（Linux 无 DISPLAY / headless）
+    #   时，解析仍应尝试并如实报告"未定稿"，而不是整块跳过、什么都不报。
     tmp = None
     try:
         if getattr(tk, "_default_root", None) is None:
             tmp = tk.Tk()
             tmp.withdraw()
+    except Exception:
+        tmp = None
+    try:
         F()
         FM()
     except Exception:
