@@ -421,6 +421,42 @@ def smoke_main_window(verbose: bool = True,
                 _p = _screencapture("selftest_main_window.png")
                 if _p:
                     _out(f"        （已截图 {_p}）")
+                # ★★ 2026-10-04 新增：逐页真的切一遍并确认每页都显示出来。
+                #    用户要求「在 mac 上测一下所有功能是否正常」——
+                #    光验证"主窗口显示"不够，9 个页面各自能不能显示、切页会不会
+                #    出错才是真正用得到的东西。这里在**真实事件循环**下逐页切。
+                bad = []
+                for _k in ("run", "setup", "more", "overview", "account",
+                           "books", "tasks", "settings", "about"):
+                    try:
+                        win.show_page(_k)
+                        root.update_idletasks()
+                        root.update()
+                        _fr = win._pages.get(_k)
+                        _vw = bool(_fr.winfo_viewable()) if _fr else False
+                        _gw = _fr.winfo_width() if _fr else 0
+                        _gh = _fr.winfo_height() if _fr else 0
+                        _lbl = win._page_labels().get(_k, _k)
+                        if _vw and _gw > 1 and _gh > 1:
+                            _out(f"        ✓ 页面「{_lbl}」显示正常 "
+                                 f"（{_gw}x{_gh}）")
+                        else:
+                            bad.append(f"{_k}（viewable={_vw} {_gw}x{_gh}）")
+                    except Exception as e:
+                        bad.append(f"{_k}: {type(e).__name__}: {e}")
+                if bad:
+                    rc = 1
+                    _out("        ✗ 这些页面没能正常显示：")
+                    for _b in bad:
+                        _out("           " + _b)
+                else:
+                    _out("        ✓ 9 个页面逐个切换，全部显示正常")
+                # 切回默认页再截图，画面更有代表性
+                try:
+                    win.show_page("run")
+                    root.update()
+                except Exception:
+                    pass
             else:
                 rc = 1
                 _out(f"        ✗ {why}")

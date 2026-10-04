@@ -451,6 +451,35 @@ check_true("build-macos 的窗口探测改用可移植的 perl 超时",
 check_true("窗口探测把「没跑起来」当失败（不许静默假绿）",
            "没有正常执行" in _bm)
 
+# ★★ 2026-10-04 防回归：GUI 在 macOS 上**必须真的被测到**
+#   历史盲区：`test_gui_pages.py` 的 `_require_display()` 在 mac 上直接
+#   `os._exit(0)` SKIP；`test_startup.py` 又对 `darwin + CI` 跳过驱动。
+#   于是「mac 上界面到底正不正常」从来没验证过 —— 而打包时的
+#   `--selftest --window` 明明能在那台 runner 上把窗口显示出来。
+#   因此新增 test_all_features_macos.py（真驱动事件循环、逐页验证），
+#   并要求 tests.yml 里**确实调用**它。这条断言就是防止哪天有人把它删了。
+_tests_wf = wf_texts.get("tests.yml", "")
+check_true("tests.yml 跑了「全功能体检」（9 个页面逐个真跑）",
+           "test_all_features_macos" in _tests_wf)
+check_true("全功能测试真的存在于仓库里",
+           (ROOT / "tests" / "test_all_features_macos.py").exists())
+# 它必须能驱动事件循环 —— 不能写成 `darwin + CI → 跳过` 那种自我阉割。
+# ★ 只查**代码**（剥掉注释和字符串），否则文档里解释"为什么要修这个盲区"
+#   时提到的 darwin 会被误判。
+_afe = (ROOT / "tests" / "test_all_features_macos.py").read_text(encoding="utf-8")
+_afe_code = "\n".join(
+    l for l in _afe.splitlines()
+    if not l.strip().startswith("#"))
+# 去掉三引号块（module docstring）后，代码里不应再有"darwin 就跳过"这类判断
+_afe_code = re.sub(r'""".*?"""', "", _afe_code, flags=re.S)
+check_true("全功能测试不会在 macOS 上自我跳过（历史盲区）",
+           "darwin" not in _afe_code and "os.getenv(\"CI\")" not in _afe_code,
+           "代码里不应出现 darwin/CI 跳过逻辑")
+# 打包版自检要把 9 个页面逐个切一遍并断言显示
+_st = (ROOT / "src" / "selftest.py").read_text(encoding="utf-8")
+check_true("打包版 --selftest 会逐页验证显示（不只是构造）",
+           "页面「" in _st and "显示正常" in _st)
+
 # YAML 能不能真的解析（有 pyyaml 就真解析，没有就退回结构检查）
 try:
     import yaml

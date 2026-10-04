@@ -72,3 +72,19 @@ jobs:
           XYX_HANG_SECONDS: "20"
           XYX_PUMP_SECONDS: "10"
         run: python tests/test_startup.py
+
+      - name: ★★ 全功能体检：9 个页面逐个真跑一遍（用户要求「在 mac 上测所有功能」）
+        # ★ 2026-10-04 新增。补上 CI 里最大的一个盲区：
+        #   * test_gui_pages.py 在 mac 上 __require_display() 直接 SKIP
+        #   * test_startup.py 的驱动部分对 `darwin + CI` 也 SKIP
+        #   于是「Mac 上 GUI 到底行不行」从来没被真正验证过 ——
+        #   而打包时的 --selftest --window 明明能在这台 runner 上把窗口
+        #   显示出来（实测 0.29~0.68s），说明它**有能力**驱动事件循环。
+        #   这条测试真驱动事件循环，把 9 个页面逐个构建 + 断言 viewable +
+        #   切页不丢控件 + 重绘计数 + 关窗收尾。
+        #   ★ 三平台都跑：Linux headless 会优雅 SKIP（不是失败），
+        #     windows / macos 会真的执行。
+        env:
+          XYX_NO_DIALOG: "1"
+          XYX_FEATURE_PUMP: "5"
+        run: python tests/test_all_features_macos.py
