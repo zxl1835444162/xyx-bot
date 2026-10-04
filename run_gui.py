@@ -161,10 +161,16 @@ def main() -> None:
         # 默认**连界面一起冒烟**（这才是能抓到"进不去主界面"的那一步）；
         # 用 --no-ui 可以只做环境检查。
         want_ui = "--no-ui" not in sys.argv
+        # 窗口显示探测：用户本机默认开，CI 自动关（在 macOS runner 上会卡死）
+        wp = None
+        if "--window" in sys.argv:
+            wp = True
+        elif "--no-window" in sys.argv:
+            wp = False
         try:
             from src.selftest import run_selftest
 
-            sys.exit(run_selftest(smoke_ui=want_ui))
+            sys.exit(run_selftest(smoke_ui=want_ui, window_probe=wp))
         except Exception:
             print("自检本身失败了：\n" + traceback.format_exc())
             sys.exit(2)

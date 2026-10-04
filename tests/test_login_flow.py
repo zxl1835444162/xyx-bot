@@ -162,11 +162,23 @@ _sel = (ROOT / "src" / "selftest.py").read_text(encoding="utf-8")
 check_true("冒烟里会真的去建登录窗（复现用户那条路）",
            "LoginWindow(" in _sel)
 # ★ 只"构造"窗口是测不出"窗口没显示"的 —— 必须跑真实事件循环
-check_true("冒烟里跑了真实事件循环（mainloop）", "mainloop()" in _sel)
-check_true("冒烟里检查了窗口是否真的可见（winfo_viewable）",
-           "winfo_viewable" in _sel)
-check_true("探测有兜底超时（after(ms + 3000, ...)），不会卡死",
+check_true("冒烟里有真实事件循环探测（mainloop + winfo_viewable）",
+           "mainloop()" in _sel and "winfo_viewable" in _sel)
+check_true("探测有兜底超时（after(ms + 3000, ...)），不会死等",
            "ms + 3000" in _sel)
+# ★★ 但事件循环探测在 GitHub 的 macOS runner 上会**永久卡住**（实测踩过：
+#    两个 job 卡了 8 分钟以上只能手动取消），所以必须在 CI 里自动关闭。
+check_true("窗口探测在 CI 环境自动关闭（检测 CI 环境变量）",
+           "os.getenv(\"CI\")" in _sel and "_window_probe_wanted" in _sel)
+check_true("可以用 XYX_SELFTEST_WINDOW 显式开关",
+           "XYX_SELFTEST_WINDOW" in _sel)
+check_true("默认冒烟会 withdraw（不映射窗口，任何环境都安全）",
+           "win.withdraw()" in _sel)
+_wf = (ROOT / ".github" / "workflows" / "build-macos.yml").read_text(
+    encoding="utf-8")
+_tw = (ROOT / ".github" / "workflows" / "tests.yml").read_text(encoding="utf-8")
+check_true("CI 两个工作流都设了 timeout-minutes（防死等烧额度）",
+           "timeout-minutes" in _wf and "timeout-minutes" in _tw)
 _mw = (ROOT / "ui" / "main_window.py").read_text(encoding="utf-8")
 check_true("主窗口会显式把自己推到前台（_present）",
            "def _present" in _mw and "self.attributes(\"-topmost\", True)" in _mw)

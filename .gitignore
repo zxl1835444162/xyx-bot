@@ -35,6 +35,9 @@ packaging/**/dist/
 #   ★ 最终用的 icon.icns / icon.ico / icon-1024.png / icon-256.png 是要提交的
 packaging/icons/icon-clean.png
 
+# 调试时从 GitHub 拉下来的 job 日志（别提交）
+_log_*.txt
+
 # 编辑器
 .idea/
 .vscode/

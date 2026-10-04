@@ -659,11 +659,18 @@ def cmd_selftest() -> None:
     """环境自检：检查 tkinter / 数据目录 / Playwright / 浏览器内核，
     并且**真的把界面构造一遍**（打包版排障和 CI 验证都靠它）。
 
-    加 `--no-ui` 可以跳过界面冒烟，只做环境检查。
+    `--no-ui`     跳过界面冒烟，只做环境检查
+    `--window`    强制做「窗口真的显示出来了吗」的探测（会显示窗口）
+    `--no-window` 强制不做（CI 环境自动关闭）
     """
     from src.selftest import run_selftest
 
-    sys.exit(run_selftest(smoke_ui="--no-ui" not in sys.argv))
+    wp = None
+    if "--window" in sys.argv:
+        wp = True
+    elif "--no-window" in sys.argv:
+        wp = False
+    sys.exit(run_selftest(smoke_ui="--no-ui" not in sys.argv, window_probe=wp))
 
 
 def cmd_diag() -> None:

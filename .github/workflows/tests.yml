@@ -19,6 +19,8 @@ jobs:
   test:
     name: ${{ matrix.os }} / py${{ matrix.python }}
     runs-on: ${{ matrix.os }}
+    # ★ 兜底：防止某一步死等把额度烧光（界面探测已在 CI 里自动关闭）
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:

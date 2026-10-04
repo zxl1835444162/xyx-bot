@@ -244,7 +244,38 @@ def _visible(res: dict) -> tuple:
                    f"geometry={res.get('geometry')}）")
 
 
-def smoke_main_window(verbose: bool = True) -> int:
+def _window_probe_wanted() -> bool:
+    """要不要做「窗口真的显示出来了吗」的探测（会跑事件循环）。
+
+    ★★ 为什么必须能在自动化环境里关掉（2026-10-04 实测踩坑）
+    =====================================================================
+    这个探测要跑真实 `mainloop()` 并且让窗口真的映射到屏幕。实测在
+    **GitHub 的 macOS runner** 上会**永久卡住**（两个 job 都卡在包内自检
+    那一步，跑了 8 分钟以上只能手动取消）—— 那种 runner 虽然
+    `tk.Tk()` 能建出来（`--selftest` 报「图形会话可用」），但**没有真正的
+    登录会话去显示窗口**，于是 `after` 定时器永远不触发，`quit()` 也就
+    永远等不到。
+
+    而用户自己的 Mac 有真实桌面会话，这个探测是**最关键的诊断**
+    （「主界面出不来」很可能就是窗口建好了但没显示）。
+
+    所以规则：
+      * `XYX_SELFTEST_WINDOW=1/0` 显式指定，优先级最高
+      * 否则：检测到 `CI` 环境变量（GitHub 等自动化会自动设置）→ **关**
+      * 否则（用户手动跑）→ **开**
+    """
+    v = os.getenv("XYX_SELFTEST_WINDOW", "").strip().lower()
+    if v in ("1", "true", "yes", "on"):
+        return True
+    if v in ("0", "false", "no", "off"):
+        return False
+    if os.getenv("CI"):
+        return False
+    return True
+
+
+def smoke_main_window(verbose: bool = True,
+                      window_probe: bool | None = None) -> int:
     """★ 真的把「登录窗 → 主界面」这条路走一遍。
 
     ★★ 为什么必须做这个（2026-10-04 用户实测：macOS 上「输完授权码进不去」）
@@ -263,13 +294,16 @@ def smoke_main_window(verbose: bool = True) -> int:
 
     三种可能的根因，这里逐个覆盖：
 
-      [1] 主窗口 / 某个页面构造时抛异常
-          → 构造 MainWindow + 把 9 个页面都构建一遍
+      [1] 主窗口 / 某个页面构造时抛异常，或打包产物缺模块
+          → 构造 MainWindow + 把 9 个页面都构建一遍（**不映射窗口**，
+            所以任何环境都能安全跑，包括 CI）
       [2] 窗口建出来了但**没显示出来/没到前台**（macOS 上"销毁再建 root"
           之后容易这样；构造成功所以什么都不报，用户就是"进不去"）
-          → **跑真实事件循环**，检查 winfo_viewable()/state()
-      [3] 打包产物缺模块（只有 .app 里才缺，源码跑没问题）
-          → 这个函数在包内 `--selftest` 里也会跑，直接暴露
+          → 跑真实事件循环，检查 winfo_viewable()/state()
+          ★ 这一步会真的显示窗口，**只在用户本机默认开启**，CI 里关闭
+            （见 `_window_probe_wanted`）
+      [3] 「登录窗 → 销毁 → 主窗」这条顺序本身有问题
+          → 始终执行；有窗口探测时带事件循环，否则只做构造
 
     Returns:
         0 = 都通过（或没有图形会话，跳过）；1 = 有失败
@@ -283,14 +317,19 @@ def smoke_main_window(verbose: bool = True) -> int:
         _out(f"  跳过界面冒烟：当前没有图形会话（{detail}）")
         return 0
 
+    if window_probe is None:
+        window_probe = _window_probe_wanted()
+    n_steps = 3 if window_probe else 2
+
     rc = 0
 
-    # ---- [1] 全新 root 构造主窗口 + 构建所有页面 ----
-    _out("  [1/3] 构造主窗口，并逐个构建 9 个页面 …")
+    # ---- [1] 构造主窗口 + 构建所有页面（不显示窗口，任何环境都安全）----
+    _out(f"  [1/{n_steps}] 构造主窗口，并逐个构建 9 个页面 …")
     try:
         from ui.main_window import MainWindow
 
         win = MainWindow(username="selftest")
+        win.withdraw()          # ★ 不映射窗口：CI 上映射会卡死
         pages = ("run", "setup", "more", "overview", "account",
                  "books", "tasks", "settings", "about")
         failed_pages = []
@@ -316,54 +355,67 @@ def smoke_main_window(verbose: bool = True) -> int:
         for line in traceback.format_exc().splitlines():
             _out("           " + line)
 
-    # ---- [2] 主窗口到底显示出来了没有（跑真实事件循环）----
-    _out("  [2/3] 跑事件循环，检查主窗口是否真的显示出来 …")
-    try:
-        from ui.main_window import MainWindow
-
-        win = MainWindow(username="selftest")
-        probe = _probe_window(win)
-        shown, why = _visible(probe)
-        if shown:
-            _out(f"        ✓ 主窗口已显示  {why}")
-        else:
-            rc = 1
-            _out(f"        ✗ {why}")
+    # ---- [2] 窗口到底显示出来了没有（只在允许时做）----
+    if window_probe:
+        _out("  [2/3] 跑事件循环，检查主窗口是否真的显示出来 …")
         try:
-            win.destroy()
-        except Exception:
-            pass
-    except Exception:
-        rc = 1
-        _out("        ✗ 失败：")
-        for line in traceback.format_exc().splitlines():
-            _out("           " + line)
+            from ui.main_window import MainWindow
 
-    # ---- [3] 复现真实顺序：登录窗 → 销毁 → 主窗口（带事件循环）----
-    _out("  [3/3] 复现真实顺序：登录窗 → 销毁 → 主窗口（两个 root 都跑事件循环）…")
+            win = MainWindow(username="selftest")
+            probe = _probe_window(win)
+            shown, why = _visible(probe)
+            if shown:
+                _out(f"        ✓ 主窗口已显示  {why}")
+            else:
+                rc = 1
+                _out(f"        ✗ {why}")
+            try:
+                win.destroy()
+            except Exception:
+                pass
+        except Exception:
+            rc = 1
+            _out("        ✗ 失败：")
+            for line in traceback.format_exc().splitlines():
+                _out("           " + line)
+
+    # ---- [3] 复现真实顺序：登录窗 → 销毁 → 主窗口 ----
+    label = "[3/3]" if window_probe else "[2/2]"
+    if window_probe:
+        _out(f"  {label} 复现真实顺序：登录窗 → 销毁 → 主窗口"
+             "（两个 root 都跑事件循环）…")
+    else:
+        _out(f"  {label} 复现真实顺序：登录窗 → 销毁 → 主窗口"
+             "（只构造，不映射窗口）…")
     try:
         from ui.login_window import LoginWindow
         from ui.main_window import MainWindow
 
         lw = LoginWindow(on_success=lambda u: None)
-        p1 = _probe_window(lw)
-        s1, w1 = _visible(p1)
-        _out(f"        {'✓' if s1 else '✗'} 登录窗：{w1}")
+        if window_probe:
+            p1 = _probe_window(lw)
+            s1, w1 = _visible(p1)
+            _out(f"        {'✓' if s1 else '✗'} 登录窗：{w1}")
+        else:
+            lw.withdraw()
+            s1, w1 = True, "（未做显示探测）"
         lw.destroy()
 
         win2 = MainWindow(username="selftest")
-        p2 = _probe_window(win2)
-        s2, w2 = _visible(p2)
-        if s2:
-            _out(f"        ✓ 登录窗销毁后，主窗口仍能正常显示：{w2}")
+        if window_probe:
+            p2 = _probe_window(win2)
+            s2, w2 = _visible(p2)
+            if s2:
+                _out(f"        ✓ 登录窗销毁后，主窗口仍能正常显示：{w2}")
+            else:
+                rc = 1
+                _out("        ✗ **这就是「输完授权码进不去主界面」** —— "
+                     "登录窗没了，主窗口建出来了但没显示：")
+                _out(f"           {w2}")
+                _out(f"           （登录窗当时是：{w1}）")
         else:
-            rc = 1
-            _out("        ✗ **这就是「输完授权码进不去主界面」** —— 登录窗没了，"
-                 "主窗口建出来了但没显示：")
-            _out(f"           {w2}")
-            _out(f"           （登录窗当时是：{w1}）")
-        if not s1:
-            _out("        ⚠ 登录窗本身也没探到「已显示」（可能只是探测时机问题）")
+            win2.withdraw()
+            _out("        ✓ 登录窗销毁后，仍能创建主窗口")
         try:
             win2.destroy()
         except Exception:
@@ -377,13 +429,19 @@ def smoke_main_window(verbose: bool = True) -> int:
     return rc
 
 
-def run_selftest(verbose: bool = True, smoke_ui: bool = False) -> int:
+def run_selftest(verbose: bool = True, smoke_ui: bool = False,
+                 window_probe: bool | None = None) -> int:
     """跑一遍自检并打印。返回进程退出码（0 = 可以启动）。
 
     Args:
-        verbose:  是否打印明细
-        smoke_ui: 是否额外**真的把界面构造一遍**（见 `smoke_ui`）。
-                  命令行的 `--selftest` 默认开；程序内部调用默认关。
+        verbose:      是否打印明细
+        smoke_ui:     是否额外**真的把界面构造一遍**
+                      （见 `smoke_main_window`）。
+                      命令行的 `--selftest` 默认开；程序内部调用默认关。
+        window_probe: 界面冒烟里是否做「窗口真的显示了吗」的探测（会跑事件
+                      循环、会真的显示窗口）。None = 自动判断：用户本机开，
+                      **CI 环境自动关**（在 macOS runner 上会卡死，
+                      详见 `_window_probe_wanted`）。
     """
     f = collect_facts()
 
@@ -416,7 +474,10 @@ def run_selftest(verbose: bool = True, smoke_ui: bool = False) -> int:
             print("-" * 66)
             print("  界面构造冒烟（重点：打包后最容易出问题的部分）")
         # ★ 注意别写成 smoke_ui(...) —— 那是本函数的参数名，会遮蔽同名函数
-        ui_rc = smoke_main_window(verbose)
+        ui_rc = smoke_main_window(verbose, window_probe=window_probe)
+        if verbose and window_probe is False:
+            print("        （未做窗口显示探测：自动化环境默认关闭，"
+                  "可用 --window 强制打开）")
 
     if verbose:
         print("-" * 66)
@@ -438,4 +499,10 @@ def run_selftest(verbose: bool = True, smoke_ui: bool = False) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(run_selftest(smoke_ui="--no-ui" not in sys.argv))
+    _wp = None
+    if "--window" in sys.argv:
+        _wp = True
+    elif "--no-window" in sys.argv:
+        _wp = False
+    sys.exit(run_selftest(smoke_ui="--no-ui" not in sys.argv,
+                          window_probe=_wp))
