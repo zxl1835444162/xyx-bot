@@ -4,26 +4,50 @@
 
 ---
 
-## 一、先说清楚：我做了什么、**哪些我验证不了**
+## 一、结论：**macOS 版已经真的构建出来了**
 
 | 我做了什么 | 状态 |
 |---|---|
-| 平台适配（字体 / UA / 数据目录 / 启动器 / 浏览器检测） | ✅ 已改，**在 Windows 上实测没有行为回归** |
-| 打包配置 `packaging/macos/xyxbot.spec` | ✅ 已写，语法校验通过（`compile()`） |
-| GitHub Actions 工作流（测试 + 打包） | ✅ 已写，**用真实 YAML 解析器验证过**，矩阵/标签都对 |
-| 环境自检 `--selftest`（不开窗口，CI 与排障共用） | ✅ 已实现，**本机实测退出码 0** |
-| 跨平台回归测试 `tests/test_portability.py` | ✅ 87 项，**本机全绿** |
+| 平台适配（字体 / UA / 数据目录 / 启动器 / 浏览器检测） | ✅ 已改，Windows 上实测无行为回归 |
+| 打包配置 `packaging/macos/xyxbot.spec` | ✅ 语法校验通过；**已在 macOS 上真实打包成功** |
+| GitHub Actions 工作流（测试 + 打包） | ✅ 真实 YAML 解析验证；**已真实跑通** |
+| 应用图标 `.icns` / `.ico` | ✅ 从你给的图生成，含去水印与 macOS 圆角外形 |
+| 跨平台回归测试 `tests/test_portability.py` | ✅ 107 项，本机全绿 |
+| **macOS 构建（两架构）** | ✅ **CI 上真实构建成功**，产物已下载到本机 |
 
-**我验证不了的（必须由 macOS + CI 来完成）：**
+### 实际构建结果
 
-1. **我无法在 Windows 上跑 macOS 二进制。** PyInstaller 不能跨平台编译 ——
-   `.app` 只能在 macOS 上打。所以"打出来的包能不能双击起来"这件事，
-   只有 CI 跑过一次才知道。
-2. **我无法执行 shell 脚本**（这台机器没有 Git Bash / WSL 发行版），
-   所以 `scripts/*.sh` 只做了逐行审查，没跑过 `bash -n`。
-3. **我无法运行 GitHub Actions**（这台机器**没装 git**，也没有仓库和凭据）。
+```
+运行: https://github.com/zxl1835444162/xyx-bot/actions/runs/37182790624
+结论: success   （约 2 分钟）
 
-所以下面第二节是**你要做的一步**，做完 CI 就会给你答案。
+  ✓ XYXBot-macos-arm64     57.1 MB   ← Apple Silicon（M 系列）
+  ✓ XYXBot-macos-x86_64    59.6 MB   ← Intel Mac
+```
+
+产物已下载到：`C:\Users\Administrator\Downloads\xyx-bot-macos\`
+
+CI 上这几步都是**真跑过并通过**的（不只是"配置看起来对"）：
+
+1. 确认 runner 的 Python 带 tkinter
+2. 安装依赖（playwright + pyinstaller）
+3. 打包前跑 5 个纯逻辑测试套件
+4. **PyInstaller 打包** → 产出 `dist/XYXBot.app`
+5. **校验包结构**：可执行位 / 架构（lipo）/ `Info.plist` 里中文显示名
+   / `.icns` 图标 / **Playwright driver 在不在包里**
+6. **包内 `--selftest` 冒烟**（不创建窗口，所以 runner 上能跑）
+   —— 它 import 了 `src.config` / `src.selftest` / `src.session` /
+   `browser_detector`，跑通就证明我们的模块确实打进去了
+7. `ditto` 压缩（保留 `.app` 权限与符号链接）
+8. 上传 Artifact
+
+### 仍然无法由我验证的
+
+| 项 | 为什么 |
+|---|---|
+| **双击 .app 起来的实际观感** | 我没有 Mac。GUI 能不能画出来、Dock 图标好不好看、中文排版对不对，需要你在 Mac 上开一次 |
+| shell 脚本的 `bash -n` | 这台机器没有 Git Bash / WSL 发行版。不过 `build_macos.sh` 的每一步在 CI 里都等价跑过了 |
+| 签名 / 公证后的行为 | 需要 Apple 开发者账号，没做 |
 
 ---
 
@@ -159,11 +183,71 @@ bash scripts/build_macos.sh
 
 ```
 ① Finder 里【右键 → 打开】→ 弹窗里再点【打开】（只需一次）
-② 或者：xattr -cr /path/to/XYXBot.app
+② 或者：xattr -cr /Applications/XYXBot.app
 ```
 
 彻底免掉需要 Apple 开发者账号（$99/年）做**签名 + 公证**。
 工作流里留了 `codesign_identity` 的位置，要接的时候告诉我。
+
+---
+
+## 三、把包装到 Mac 上
+
+产物是**两层 zip**（GitHub 的 artifact 会把上传的文件再包一层）。这不是 bug，
+反而**必须**这样：macOS 的 `.app` 里有**符号链接**和**可执行权限**，
+只有 `ditto` 打的 zip 能原样保留（实测包里 57 个符号链接都在）。
+让 GitHub 直接对 `.app` 目录打 zip 会破坏这些，装上去就是打不开。
+
+所以在 Mac 上：
+
+```bash
+# 第一次解压：拿到 ditto 打的包
+unzip XYXBot-macos-arm64.zip            # → XYXBot-macos-arm64.zip
+
+# 第二次解压：必须用 ditto，才会还原符号链接与权限
+ditto -x -k XYXBot-macos-arm64.zip .    # → XYXBot.app
+mv XYXBot.app /Applications/
+
+# 首次打开（未签名）
+xattr -cr /Applications/XYXBot.app
+open /Applications/XYXBot.app
+```
+
+> 也可以用 Finder 双击解压：外层 → 内层 → 得到 `XYXBot.app`，
+> 然后拖进「应用程序」。Finder 的解压同样会保留符号链接。
+
+### 装好后的第一次运行
+
+1. 打开应用 → 授权码窗口（演示码 `ZSJT-2026-VIP`）
+2. 进主界面默认落在「跑章」页 → 去「准备」页点「登录星月账号」扫码登录一次
+3. 之后就能点「开始跑章」了
+
+**数据目录**（登录态 / 配置 / 细纲 / 日志都在这里，不在 `.app` 内）：
+
+```
+~/Library/Application Support/XYXBot/artifacts/
+```
+
+想确认环境有没有问题，在终端跑：
+
+```bash
+/Applications/XYXBot.app/Contents/MacOS/XYXBot --selftest
+```
+
+它会逐项打印：tkinter / 图形会话 / 数据目录是否可写 / Playwright driver /
+浏览器内核 / 登录态，最后给个结论。**缺 Chrome/Edge 时**它会告诉你去装一个，
+或执行 `python -m playwright install chromium`。
+
+---
+
+## 三点五、两种架构怎么选
+
+| 你的 Mac | 下哪个 |
+|---|---|
+| M1 / M2 / M3 / M4（2020 年底之后的基本都是） | `XYXBot-macos-arm64.zip` |
+| Intel（2020 年之前的） | `XYXBot-macos-x86_64.zip` |
+
+不确定就在终端跑 `uname -m`：`arm64` → 前者，`x86_64` → 后者。
 
 ---
 

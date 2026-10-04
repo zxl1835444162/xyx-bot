@@ -1,7 +1,15 @@
 # 赵氏集团 · 星月创作台（xyx-bot）
 
+<p align="center">
+  <img src="packaging/icons/icon-256.png" width="128" alt="星月创作台">
+</p>
+
 基于 **Python + Playwright** 的浏览器自动化系统，带现代深色图形界面。
 目标站点：[星月写作](https://xingyuexiezuo.com/)。
+
+> **支持平台**：Windows、**macOS**（Apple Silicon + Intel）。
+> macOS 版由 GitHub Actions 自动打包成 `XYXBot.app`，见
+> [`MACOS_PORT.md`](MACOS_PORT.md)。
 
 架构**移植自** `novel-publisher-mac`（同作者的网文发布工具），复用了它经过实战的：
 浏览器引擎（CDP 接管 / 反自动化检测）、跨平台浏览器检测、**平台注册表**、**任务注册表**、

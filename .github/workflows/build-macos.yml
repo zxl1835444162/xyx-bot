@@ -135,11 +135,32 @@ jobs:
           ditto -c -k --keepParent dist/XYXBot.app "dist/XYXBot-macos-${{ matrix.arch }}.zip"
           ls -lh dist/*.zip
 
+      - name: 打 DMG（Mac 上双击就能装的那种）
+        shell: bash
+        run: |
+          set -e
+          # ★ 为什么不只给 zip：.app 里有符号链接和可执行权限，
+          #   用 zip 分发时用户必须 `ditto -x -k` 才能正确解压，
+          #   直接双击解压有概率丢权限。DMG 是磁盘映像，天然保留一切，
+          #   而且双击挂载 → 拖进「应用程序」就是 Mac 的标准安装动作。
+          #   卷名用 ASCII，避免 CI shell 的编码问题。
+          hdiutil create \
+            -volname "XYXBot" \
+            -srcfolder dist/XYXBot.app \
+            -ov -format UDZO \
+            "dist/XYXBot-macos-${{ matrix.arch }}.dmg"
+          ls -lh dist/*.dmg
+          echo "--- 校验 DMG 结构 ---"
+          hdiutil imageinfo "dist/XYXBot-macos-${{ matrix.arch }}.dmg" | head -20
+
       - name: 上传产物
         uses: actions/upload-artifact@v4
         with:
           name: XYXBot-macos-${{ matrix.arch }}
-          path: dist/XYXBot-macos-${{ matrix.arch }}.zip
+          # ★ 同时给 dmg（推荐，双击安装）和 zip（存档/兼容）
+          path: |
+            dist/XYXBot-macos-${{ matrix.arch }}.dmg
+            dist/XYXBot-macos-${{ matrix.arch }}.zip
           if-no-files-found: error
           retention-days: 30
 
@@ -151,4 +172,6 @@ jobs:
         run: |
           set -e
           TAG="${GITHUB_REF_NAME}"
-          gh release upload "$TAG" "dist/XYXBot-macos-${{ matrix.arch }}.zip" --clobber
+          gh release upload "$TAG" \
+            "dist/XYXBot-macos-${{ matrix.arch }}.dmg" \
+            "dist/XYXBot-macos-${{ matrix.arch }}.zip" --clobber
