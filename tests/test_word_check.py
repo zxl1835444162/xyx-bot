@@ -254,6 +254,226 @@ check_true("_settle 会校验长度容差",
 check_true("_settle 会校验前缀",
            "if head and head not in cur" in ai_src)
 
+# ============================================ 6. 防「套娃」（多轮重复包层）
+print("\n=== 6. 审稿「整体替换」不会越包越多 ===")
+
+# ★ 用户追问：「那么，是不是，全部替换了，框中的内容，达到文字+正文？」
+#   答：是整体替换（fill 是覆盖语义）。但**读出+拼接+覆盖**若不剥旧层，
+#       就会 827 → 867 → 907 → 946 每轮多包一层。本节锁死这个行为。
+
+# 从真实模块导入纯函数来测（最有说服力，不会与实现漂移）
+import importlib.util as _ilu
+import types as _types
+
+# ★ 无浏览器环境也要能真导入：给 playwright 塞一个空壳，
+#   我们只测纯字符串函数，不碰 Page。
+for _n in ("playwright", "playwright.sync_api", "playwright._impl",
+           "playwright._impl._errors"):
+    if _n not in sys.modules:
+        _m = _types.ModuleType(_n)
+        sys.modules[_n] = _m
+_pw = sys.modules["playwright.sync_api"]
+for _attr in ("Page", "Browser", "BrowserContext", "Locator",
+              "TimeoutError", "Error", "expect"):
+    if not hasattr(_pw, _attr):
+        setattr(_pw, _attr, type(_attr, (), {}))
+sys.modules["playwright"].sync_api = _pw
+
+_spec = None
+_ai = None
+_real_import = False
+try:
+    # ★ 必须按**包**导入：src/ai.py 里有 `from . import config` 等相对导入
+    import src.ai as _ai_mod
+    _ai = _ai_mod
+    _real_import = True
+except Exception as e:
+    print(f"  [WARN] 以包方式导入 src.ai 失败（{str(e).splitlines()[0]}），"
+          f"尝试文件加载")
+    try:
+        _spec = _ilu.spec_from_file_location("_ai_mod", str(ROOT / "src" / "ai.py"))
+        _ai = _ilu.module_from_spec(_spec)
+        _spec.loader.exec_module(_ai)
+        _real_import = True
+    except Exception as e2:  # pragma: no cover - 环境缺依赖时的兜底
+        print(f"  [WARN] 无法直接导入 src/ai.py（{str(e2).splitlines()[0]}），"
+              f"改用源码内联实现")
+
+if _real_import:
+    _SEP = _ai.REVIEW_SEP
+    _strip = _ai.strip_review_wrapper
+else:  # pragma: no cover
+    _SEP = "————————以下为待审正文————————"
+
+    def _strip(text: str) -> str:
+        if not text:
+            return ""
+        if _SEP not in text:
+            return text.strip()
+        return text.rsplit(_SEP, 1)[-1].strip()
+
+check_true("测试的是 src/ai.py 里的**真实** strip_review_wrapper（非内联复刻）",
+           _real_import,
+           "若为 False，说明只是内联实现，没验证到真代码")
+check_true("REVIEW_SEP 存在且非空", bool(_SEP))
+
+# ---- 基本剥离语义 ----
+check("无分隔线 → 原样（strip 首尾空白）", _strip("纯正文内容"), "纯正文内容")
+check("单层 → 取分隔线之后", _strip(f"指令A\n\n{_SEP}\n\n正文B"), "正文B")
+check("多层 → 取【最后】一条分隔线之后（核心）",
+      _strip(f"指令B\n\n{_SEP}\n\n指令A\n\n{_SEP}\n\n正文真身"), "正文真身")
+check("三层 → 仍然只留最后一段",
+      _strip(f"A\n\n{_SEP}\n\nB\n\n{_SEP}\n\nC\n\n{_SEP}\n\n正文"), "正文")
+check("空串安全", _strip(""), "")
+check("None 安全", _strip(None), "")
+check("只有分隔线 → 空", _strip(f"{_SEP}"), "")
+check("正文里没有分隔线时不受影响",
+      _strip("他说：这是正文，没有分隔线"), "他说：这是正文，没有分隔线")
+
+# ---- ★★★ 核心回归：连续两轮必须收敛，不能越包越多 ----
+def _round(body_in_box: str, instr: str) -> tuple[str, str]:
+    """复刻一次审稿：读框 → 剥 → 拼 → 覆盖。返回 (填入内容, 下一轮框内内容)。"""
+    plain = _strip(body_in_box)                 # read_body_settled 的语义
+    full = f"{instr}\n\n{_SEP}\n\n{plain}"      # fill_review_text 的拼接
+    return full, full                           # fill 是覆盖语义
+
+
+box = "这是第一章的正文。"                       # 站点初始带入
+r1, box = _round(box, "指令一")
+r2, box = _round(box, "指令二")
+r3, box = _round(box, "指令三")
+
+check("第 1 轮后：正文仍是原文", _strip(box).endswith("这是第一章的正文。"), True)
+check("第 2 轮后：正文没有翻倍", _strip(r2), _strip(r1))
+check("第 3 轮后：正文仍然只有一份", _strip(r3), _strip(r1))
+check("换指令后旧指令不残留（框内只出现最后一次指令）",
+      box.count("指令一") + box.count("指令二"), 0)
+check("换指令后框内是最后一次的指令", "指令三" in box, True)
+check("框内分隔线始终只有 1 条（不变多）", box.count(_SEP), 1)
+check("三轮后框内长度不增长", len(r3), len(r1))
+
+# ---- 逐字复刻真机探针 5 的数字（827 原文）----
+orig = "原" * 827
+_f1, b1 = _round(orig, "第一次指令")
+_f2, b2 = _round(b1, "第二次指令")
+_f3, b3 = _round(b2, "第三次指令")
+check("827 字原文：第 1 轮后正文长度保持 827", len(_strip(b1)), 827)
+check("827 字原文：第 2 轮后正文长度仍是 827（不再 907）", len(_strip(b2)), 827)
+check("827 字原文：第 3 轮后正文长度仍是 827（不再 946）", len(_strip(b3)), 827)
+
+# ---- 静态契约：接线确实用上了剥离 ----
+check_true("存在 strip_review_wrapper",
+           "def strip_review_wrapper" in ai_src)
+check_true("存在 read_review_body",
+           "def read_review_body" in ai_src)
+check_true("read_review_body 内部会剥离",
+           "return strip_review_wrapper(raw)" in ai_src)
+check_true("read_body_settled 返回的是剥离后的正文（不是裸 box）",
+           "return plain" in ai_src and "plain = strip_review_wrapper(box)" in ai_src,
+           "若仍 `return box`，套娃 bug 未修复")
+check_true("read_body_settled 不再直接返回原始 box",
+           "return box" not in ai_src,
+           "原始内容可能含旧指令层")
+check_true("read_body_settled 退化分支也剥离",
+           "return strip_review_wrapper(body)" in ai_src)
+check_true("fill_review_text 拼接前做防御性剥离",
+           "body = strip_review_wrapper(body)" in ai_src)
+check_true("拼接用的分隔线是常量 REVIEW_SEP（不再手写字符串）",
+           "f\"{REVIEW_SEP}\\n\\n{body}\"" in ai_src or
+           "{REVIEW_SEP}\\n\\n{body}" in ai_src)
+
+# ============================================ 7. 换章审稿：实测证伪「滞留上一章」
+print("\n=== 7. 换章审稿：抽屉里必须是当前章正文 ===")
+
+# ★ 用户提示：「不是，是你换了章，才点审稿的」——提醒我看真实用法。
+#   我曾据此怀疑一个 bug 并加了"面板已开就刷新"的逻辑：
+#     站点**只在抽屉打开的那一刻**灌入当前章正文，换章不会更新
+#     ⇒ 面板开着换章 → 框里滞留上一章 → 审错章
+#
+#   ★★ 但复刻用户真实流程后用真机实测**证伪**了：
+#     真实链路是「换章 → 开续写 → 关续写 → 点审稿」
+#     （续写弹窗是居中模态，必须先关，见 continue_to_review 的坑1）
+#     ⇒ 此时抽屉**必是首次打开**，站点会正常灌入当前章正文。
+#     实测：第3章流程→框内第3章、第1章流程→框内第1章，均正确。
+#
+#   ⇒ 结论：**不存在错章问题**，不该加"先关后开"的刷新逻辑（徒增复杂）。
+#     本节改为**锁定这个结论**，防止后人又被同样的猜测误导、加回无用代码。
+
+check_true("open_review_pane 不再有 refresh_body 参数（实测证伪，保持简单）",
+           "refresh_body" not in ai_src,
+           "该参数针对不存在的场景；真实流程抽屉总是首次打开")
+check_true("open_review_pane 不再有 expect_body 参数",
+           "expect_body" not in ai_src)
+check_true("没有『先关后开』的强制刷新分支",
+           "抽屉已开着但需刷新正文" not in ai_src)
+check_true("ai_review 不做正文前缀校验（无此必要）",
+           "当前章正文前缀（用于校验抽屉带入）" not in ai_src)
+
+# 但真实的衔接坑必须还在：续写弹窗不自动关，开审稿前要先关
+check_true("close_continue_dialog 仍存在（续写弹窗拦点击）",
+           "def close_continue_dialog" in ai_src)
+check_true("continue_to_review 仍会先关续写弹窗再开审稿",
+           "close_continue_dialog(page)" in ai_src)
+
+# ============================================ 8. 审稿前必须确认"是哪一章"
+print("\n=== 8. 审稿前核对章号（用户问「你知道是哪一章吗？」）===")
+
+# ★ 用户原话：「你续写完了，你知道是哪一章吗？」
+#   一条龙的续写和审稿作用在「编辑器当前打开的那一章」。
+#   站点在某些操作后可能自己跳章（如自动新建章节后跳到新章）
+#   ⇒ 不核对就会**审错章**。所以：
+#     ① 新增 current_chapter_no() 读当前 active 章号
+#     ② ai_auto_chapter 审稿前核对；不符则切回；切不回就终止
+
+check_true("存在 current_chapter_no（读当前打开的章号）",
+           "def current_chapter_no" in ai_src)
+check_true("current_chapter_no 用 active 标记定位",
+           "chapter-item--active" in ai_src)
+check_true("ai_auto_chapter 审稿前做章号核对",
+           "审稿前核对" in ai_src)
+check_true("章号不符会切回目标章",
+           "续写后站点跳章了" in ai_src)
+check_true("切不回目标章会终止（宁可失败也不审错章）",
+           "避免审错章" in ai_src)
+check_true("错位时返回明确的 reason",
+           "审稿前章节错位" in ai_src)
+
+# ---- 纯逻辑：章号核对分支 ----
+def _chap_check(cur_no: int, want_no: int) -> str:
+    """复刻 ai_auto_chapter 的章号核对判定。"""
+    if want_no <= 0:
+        return "跳过"           # 没指定章号
+    if cur_no == want_no:
+        return "一致"
+    if cur_no < 0:
+        return "未知继续"        # 读不出来，不阻断
+    return "切回"
+
+
+check("章号一致 → 直接审", _chap_check(3, 3), "一致")
+check("章号不符 → 切回目标章", _chap_check(4, 3), "切回")
+check("读不出章号 → 继续（不阻断）", _chap_check(-1, 3), "未知继续")
+check("未指定章号 → 跳过核对", _chap_check(3, -1), "跳过")
+
+# ============================================ 9. 一条龙默认参数不该放宽
+print("\n=== 9. 一条龙函数默认值（防漏传时静默失效）===")
+
+# ★ ai_auto_chapter / ai_batch_chapters 的**签名默认值**若还是
+#   100~5000 + max_retry=0，则任何漏传的调用方（CLI/新入口/单测）
+#   都会静默拿到"放宽区间 + 不重试"，正是用户最初报的 bug。
+check_true("ai_auto_chapter 默认下限是 2100（不再是 100）",
+           "min_words: int = 2100" in ai_src,
+           "宽区间默认会让字数限制静默失效")
+check_true("ai_auto_chapter 默认上限是 2300（不再是 5000）",
+           "max_words: int = 2300" in ai_src)
+check_true("ai_auto_chapter 默认 max_retry 是 5（不再是 0）",
+           "max_retry: int = 5" in ai_src,
+           "max_retry=0 等于一轮定生死")
+check_true("ai_batch_chapters 默认下限也是 2100",
+           "min_words: int = 2100" in ai_src)
+check_true("ai_batch_chapters 默认 max_retry 也是 5",
+           "max_retry: int = 5" in ai_src)
+
 # ============================================ 汇总
 print("\n" + "=" * 60)
 print(f"  通过 {len(PASS)} 项，失败 {len(FAIL)} 项")

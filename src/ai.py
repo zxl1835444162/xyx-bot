@@ -2343,6 +2343,13 @@ def open_review_pane(page: Page, wait: float = 0.6,
       （「是否默认打开上次章节？」「国庆特惠」通知）挡住工具栏，
       导致点击超时或点了没反应。
 
+    ★ 面板已开就直接复用（不重复点）。
+      ★ 曾担心"面板开着换章会滞留上一章正文"，真机实测评测**证伪**：
+        真实链路是「换章 → 开续写 → 关续写 → 点审稿」，
+        此时抽屉必是首次打开，站点会正常灌入当前章正文。
+        （探针实测：第3章流程→框内第3章、第1章流程→框内第1章，均正确。）
+        所以**不加"先关后开"的刷新逻辑** —— 保持简单。
+
     ★ 策略（重要）：**重试 + 柔性**
       - 每次先「清干扰」（有则关、没有就跳过，绝不阻塞）
       - 点击后轮询等面板；没出来就再来一轮
@@ -2502,8 +2509,50 @@ def current_review_requirement(page: Page) -> str:
     return ""
 
 
+REVIEW_SEP = "————————以下为待审正文————————"
+
+
+def strip_review_wrapper(text: str) -> str:
+    """★ 把「指令 + 分隔线 + 正文」剥回**纯正文**（2026-10-04 新增）。
+
+    ★★ 为什么必须剥（用户问「是不是全部替换了框中的内容」→ 引出的真 bug）：
+      我们的策略是「读出框里的正文 → 拼上指令 → 覆盖填回」。
+      但 `read_review_box()` 读到的**不一定**是干净正文 —— 如果这个弹窗
+      之前已经被我们处理过一次，框里就是 `指令 + 分隔线 + 正文`。
+      再拼一次就会变成：
+
+          指令B + 分隔线 + (指令A + 分隔线 + 正文)
+
+      ⇒ **每跑一次就多包一层**，字数越审越多、内容重复。
+      真机实测（探针 5）：
+          827 → 867（1 层）→ 907（2 层）→ 946（3 层 + 换指令还残留旧指令）
+
+      所以拼接前必须先剥：**取最后一条分隔线之后的全部内容**当正文。
+      （用"最后一条"是因为正文本身不可能含这条分隔线，
+        而多层套娃时最靠后的那条后面才是真正的正文。）
+
+    Returns: 纯正文（无分隔线时原样返回，并 strip 掉首尾空白）
+    """
+    if not text:
+        return ""
+    if REVIEW_SEP not in text:
+        return text.strip()
+    # 取**最后**一条分隔线之后的内容
+    body = text.rsplit(REVIEW_SEP, 1)[-1]
+    return body.strip()
+
+
+def read_review_body(page: Page) -> str:
+    """读「待审文本」框里的**纯正文**（自动剥掉可能存在的旧指令层）。
+
+    这就是拼接时应该用的正文来源。
+    """
+    raw = read_review_box(page)
+    return strip_review_wrapper(raw)
+
+
 def read_review_box(page: Page) -> str:
-    """读「待审文本」框里**已有的内容**（站点自动带入的正文）。
+    """读「待审文本」框里**已有的原始内容**（未做任何剥离）。
 
     ★★ 为什么这个比 `get_body_text` 更靠谱（2026-10-04 用户报障）：
       用户观察得很准：「这个审稿框，打开的时候，就有内容了」——
@@ -2517,6 +2566,9 @@ def read_review_box(page: Page) -> str:
         · 编辑器可能还在重渲染 → 读到空
 
       改为**优先读这个框**：读到的就是站点要审的东西，天然不会串章。
+
+    ★ 注意：本函数返回的是**原样内容**，可能含我们上次拼进去的指令层。
+      拼接场景请用 `read_review_body()`（会自动剥）。
 
     Returns: 框内文本；读不到返回 ""
     """
@@ -2549,6 +2601,14 @@ def read_body_settled(page: Page, timeout: float = 6.0,
       所以没有时序问题；审稿必须**先读站点给的内容再拼接**，多一步"读"，
       就必然要有等待。
 
+    ★★★ 返回值是**纯正文**（2026-10-04 二次修正：套娃 bug）：
+      本函数**绝不能**把框里的原样内容直接返回给调用方去拼接 ——
+      因为框里可能是我们上一轮拼好的 `指令 + 分隔线 + 正文`。
+      真机实测（探针 5）：连续两轮审稿会变成
+          827（原）→ 867（1 层）→ 907（2 层）→ 946（3 层）
+      ⇒ 所以统一走 `strip_review_wrapper()` 剥掉旧指令层再返回。
+      （判据用"最后一条分隔线之后"，多层时最靠后那条后面才是真正文。）
+
     策略：
       ① 优先等「待审文本框」出现**非空内容**（权威来源）
       ② 超时仍为空 → 退回等**编辑器**正文（兼容"站点没自动带入"的版本）
@@ -2569,21 +2629,27 @@ def read_body_settled(page: Page, timeout: float = 6.0,
                      desc="待审文本就绪")
 
     if box.strip():
+        # ★ 剥掉可能存在的旧指令层，只把纯正文交出去
+        plain = strip_review_wrapper(box)
+        if len(plain) != len(box.strip()):
+            print(f"[ai] ⚠ 待审文本框里含旧指令层（原样 {len(box)} 字）"
+                  f"→ 已剥出纯正文 {len(plain)} 字")
         if res.ok:
-            print(f"[ai] ✓ 待审文本框已就绪（{len(box)} 字，{res.elapsed:.2f}s）")
+            print(f"[ai] ✓ 待审文本框已就绪（{len(plain)} 字正文，"
+                  f"{res.elapsed:.2f}s）")
         else:
-            print(f"[ai] ✓ 读到待审文本框（{len(box)} 字，等待超时但已有内容）")
-        return box
+            print(f"[ai] ✓ 读到待审文本框（{len(plain)} 字正文，等待超时但已有内容）")
+        return plain
 
     # 退化：框里没有，用编辑器正文
     if not body:
         body = get_body_text(page)
     if body.strip():
         print(f"[ai] ⚠ 待审文本框为空 → 退回用编辑器正文（{len(body)} 字）")
-    else:
-        print(f"[ai] ⚠ 等了 {timeout:.1f}s，待审文本框与编辑器都为空"
-              f"→ 追加指令将只填指令部分")
-    return body
+        return strip_review_wrapper(body)
+    print(f"[ai] ⚠ 等了 {timeout:.1f}s，待审文本框与编辑器都为空"
+          f"→ 追加指令将只填指令部分")
+    return ""
 
 
 def fill_review_text(page: Page, text: str = "",
@@ -2667,12 +2733,15 @@ def fill_review_text(page: Page, text: str = "",
 
     # ② 正文 + 指令 拼接
     #    ★★ 修正（2026-10-04）：读正文必须**等它渲染好**，不能瞬时读。
+    #    ★★★ 二次修正（同日）：读到的是**纯正文**（read_body_settled 内部已剥
+    #       旧指令层）。这里再做一次防御性剥离，确保任何来源都不会套娃。
     if instruction:
         body = read_body_settled(page) if read_body else ""
+        body = strip_review_wrapper(body)      # ★ 防御性：即使上游漏剥也安全
         instr = instruction.strip()
         if body.strip():
             full = (f"{instr}\n\n"
-                    f"————————以下为待审正文————————\n\n{body}")
+                    f"{REVIEW_SEP}\n\n{body}")
             print(f"[ai] --- 待审文本 = 指令({len(instr)}字) "
                   f"+ 正文({len(body)}字) = {len(full)} 字 ---")
             head = instr[:20]          # 前缀取指令开头，稳定且不会撞车
@@ -3612,6 +3681,12 @@ def ai_review(page: Page,
         print(f"[ai] 正文已就绪（{len(get_body_text(page))} 字），跳过打开章节")
 
     # ① 打开审稿面板（右侧抽屉）
+    #    ★ 实测（2026-10-04，复刻用户真实流程）：真实链路是
+    #      「换章 → 开续写 → 关续写 → 点审稿」，此时抽屉必是**首次打开**，
+    #      站点会正常把当前章正文灌进「待审文本」框。
+    #      （曾怀疑"面板开着换章会滞留上一章"，实测证伪：
+    #        第3章流程→框内第3章、第1章流程→框内第1章，均正确。
+    #        所以不加"先关后开"的复杂逻辑。）
     if not open_review_pane(page, wait=wait_pane):
         return False
 
@@ -3842,9 +3917,9 @@ def ai_auto_chapter(page: Page,
                     shortcut: str = "",
                     shortcut_index: int = 0,
                     shortcut_search: bool = False,
-                    min_words: int = 100,       # ★ 宽区间，避免重试
-                    max_words: int = 5000,
-                    max_retry: int = 0,
+                    min_words: int = 2100,      # ★ 与 ui/defaults.py 一致
+                    max_words: int = 2300,
+                    max_retry: int = 5,
                     hard_min: int = 0,
                     best_effort: bool = True,
                     gen_timeout: float = 300.0,
@@ -3873,11 +3948,18 @@ def ai_auto_chapter(page: Page,
 
     这是用户要的**从 0 走完整一条章**的流程：
       ① 打开续写弹窗 → 选快捷选项/模型/联想 → 填剧情 → 关联章节 → 开始生成
-      ② 按字数自动决策（宽区间默认 100~5000，基本**不会重试**）
+      ② 按字数自动决策（默认 2100~2300，超了会重新生成）
       ③ ★ 关掉续写弹窗（否则模态拦截后续点击）
       ④ ★ 等正文真正写进编辑器
       ⑤ 打开审稿抽屉 → 选模型/联想/审稿要求 →（可选）追加提示词
       ⑥ 生成 → 等完成 → 全选正文 → 替换落盘
+
+    ★ 关于"一条龙"的衔接正确性（2026-10-04 复刻真实流程实测）：
+      阶段二 `close_continue_dialog()` → 阶段三 `ai_review()` 正是用户描述的
+      「续写完了 → 关掉续写 → 点审稿」链路。此时抽屉**首次打开**，
+      站点会把**当前章**（阶段一打开的那一章）正文灌进「待审文本」框，
+      且 `ai_review` 的 ⓪ 步因正文已就绪而**不会切章** ⇒ 审的正是刚续写的章。
+      实测确认无误。
 
     Args:
         plot:          后续剧情文本
@@ -3885,8 +3967,8 @@ def ai_auto_chapter(page: Page,
         gen_associate: 续写联想能力
         relate_count:  关联最近几章
         shortcut:      续写「快捷选项」关键词
-        min_words/max_words: ★ 采纳字数区间（默认 100~5000，故意放宽避免重试）
-        max_retry:     ★ 默认 0（不重试，一次过）
+        min_words/max_words: ★ 采纳字数区间（默认 2100~2300，同 ui/defaults.py）
+        max_retry:     ★ 超区间时最多重新生成几次（默认 5）
         hard_min:      保底采纳下限（0=关）
         best_effort:   重试耗尽仍采纳最后一轮
         gen_timeout:   单轮生成最长等待
@@ -4018,6 +4100,37 @@ def ai_auto_chapter(page: Page,
     print("\n" + "-" * 58)
     print("  【阶段三】AI 审稿")
     print("-" * 58)
+
+    # ★★ 审稿前校验章号（用户问「你续写完了，你知道是哪一章吗？」）
+    #   审稿作用在「编辑器当前打开的章」。若中途站点自己跳了章
+    #   （例：自动新建章节后会跳到新章），就会审错章。
+    #   这里显式确认一次；不匹配就切回目标章，切不动才放弃。
+    if chapter:
+        want_no = -1
+        m = re.search(r"第\s*(\d+)\s*章", chapter)
+        if m:
+            want_no = int(m.group(1))
+        if want_no > 0:
+            cur_no = current_chapter_no(page)
+            if cur_no == want_no:
+                print(f"[auto] ✓ 审稿前核对：当前正是第{want_no}章")
+            elif cur_no < 0:
+                print("[auto] ⚠ 读不出当前章号（无 active 标记）→ 继续")
+            else:
+                print(f"[auto] ⚠ 当前是第{cur_no}章，但目标是第{want_no}章"
+                      f"（续写后站点跳章了？）→ 切回")
+                open_chapter(page, which=chapter, wait=2.0)
+                read_body_settled(page, timeout=8.0)
+                back_no = current_chapter_no(page)
+                if back_no == want_no:
+                    print(f"[auto] ✓ 已切回第{want_no}章")
+                else:
+                    print(f"[auto] ✗ 切不回第{want_no}章（现为第{back_no}章）"
+                          f"→ 终止，避免审错章")
+                    result["reason"] = (f"审稿前章节错位：目标第{want_no}章，"
+                                        f"实际第{back_no}章")
+                    return result
+
     rev_ok = ai_review(
         page,
         model=review_model, model_card_name=review_card,
@@ -4074,6 +4187,34 @@ def chapter_numbers(page: Page) -> List[int]:
     except Exception:
         pass
     return nos
+
+
+def current_chapter_no(page: Page) -> int:
+    """只读：当前**已打开**（active）的章号；识别不了返回 -1。
+
+    ★ 为什么要这个（用户问「你续写完了，你知道是哪一章吗？」）：
+      一条龙流程里，续写和审稿都作用在「编辑器当前打开的那一章」。
+      若中途站点自己跳了章（自动新建后会跳到新章），审稿就会**审错章**。
+      有了这个函数就能在审稿前**校验**一次，把"审错章"变成可见的失败。
+
+    判据：左栏 `.chapter-item--active`（实测站点用它标已打开的章）。
+      兜底：若没有 active 项，退化为「编辑器正文能匹配到的那个章」——不做，
+            直接返回 -1（宁可报未知，也不要猜错）。
+    """
+    try:
+        act = page.locator(".chapter-item--active")
+        n = act.count()
+        for i in range(min(n, 8)):
+            try:
+                t = _text_of(act.nth(i), timeout=300)
+            except Exception:
+                t = ""
+            m = re.search(r"第\s*(\d+)\s*章", t or "")
+            if m:
+                return int(m.group(1))
+    except Exception:
+        pass
+    return -1
 
 
 def ensure_chapter(page: Page, no: int, wait: float = 2.0,
