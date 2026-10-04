@@ -394,8 +394,9 @@ def main() -> None:
         _show_fatal("初始化失败：\n\n" + traceback.format_exc())
         sys.exit(1)
 
-    # ★ 顶层循环：登录窗 → 主界面。所有 mainloop() 都在 run_app 里平级调用，
-    #   绝不嵌套（嵌套就是 macOS 上"登录后卡死"的根因，见 run_app 说明）。
+    # ★ 启动流程全在 run_app 里：建唯一 root → 直接建主操控界面 → 跑一次
+    #   mainloop。**没有登录界面、没有窗口切换、没有嵌套 mainloop**
+    #   （那两样都是 macOS 上"界面出不来"的成因，见 run_app 说明）。
     try:
         sys.exit(run_app())
     except Exception:
