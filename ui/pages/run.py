@@ -151,8 +151,8 @@ class RunMixin:
             highlightthickness=0, bd=0)
         self._run_progress_canvas.pack(side="right", fill="x", expand=True,
                                        padx=(16, 0))
-        self._run_progress_canvas.bind(
-            "<Configure>", lambda e: self._run_draw_progress())
+        # ★ 守卫版：进度条画布在 Configure 里重绘，裸绑会死循环（见 theme.bind_configure）
+        bind_configure(self._run_progress_canvas, self._run_draw_progress)
 
         self._run_progress_lbl = tk.Label(
             b, text="尚未开始", font=F(10, True), bg=COLOR["bg_card"],
@@ -865,14 +865,14 @@ class RunMixin:
                                        bg=COLOR["bg_card"])
         self._run_res_win = self._run_res_canvas.create_window(
             (0, 0), window=self._run_res_list, anchor="nw")
-        self._run_res_list.bind(
-            "<Configure>",
-            lambda e: self._run_res_canvas.configure(
-                scrollregion=self._run_res_canvas.bbox("all")))
-        self._run_res_canvas.bind(
-            "<Configure>",
-            lambda e: self._run_res_canvas.itemconfig(
-                self._run_res_win, width=e.width))
+        # ★ 守卫版：滚动区两处 Configure（裸绑在 macOS 上会死循环）
+        bind_configure(self._run_res_list,
+                       lambda: self._run_res_canvas.configure(
+                           scrollregion=self._run_res_canvas.bbox("all")))
+        bind_configure(self._run_res_canvas,
+                       lambda: self._run_res_canvas.itemconfig(
+                           self._run_res_win,
+                           width=self._run_res_canvas._cfg_w))
 
         self._run_empty_lbl = DimLabel(b, _EMPTY_RESULTS, size=8)
         self._run_empty_lbl.pack(anchor="w")
