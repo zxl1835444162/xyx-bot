@@ -41,7 +41,7 @@ from ..defaults import (
     DEFAULT_SHORTCUT,
 )
 from ..theme import (COLOR, F, BrandButton, Card, CheckBox, Collapsible,
-                     DarkEntry, DimLabel, TitleLabel)
+                     DarkEntry, DimLabel, TitleLabel, bind_configure)
 from src.runplan import (Check, Progress, format_checks,
                          has_blocking_error, preflight)
 
@@ -591,10 +591,14 @@ class RunMixin:
         self._ch_win = self._ch_canvas.create_window((0, 0),
                                                      window=self._ch_list,
                                                      anchor="nw")
-        self._ch_list.bind("<Configure>", lambda e: self._ch_canvas.configure(
-            scrollregion=self._ch_canvas.bbox("all")))
-        self._ch_canvas.bind("<Configure>", lambda e: self._ch_canvas.itemconfig(
-            self._ch_win, width=e.width))
+        # ★★ 用守卫版：在 <Configure> 里改 Canvas 配置会再触发 <Configure>，
+        #    macOS 上就是死循环（主线程永远回不到事件循环 → 界面卡住转圈）。
+        bind_configure(self._ch_list,
+                       lambda: self._ch_canvas.configure(
+                           scrollregion=self._ch_canvas.bbox("all")))
+        bind_configure(self._ch_canvas,
+                       lambda: self._ch_canvas.itemconfig(
+                           self._ch_win, width=self._ch_canvas._cfg_w))
         for w in (self._ch_canvas, self._ch_list):
             w.bind("<MouseWheel>", self._ch_scroll)
 

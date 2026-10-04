@@ -28,7 +28,7 @@ from .pages import (AboutPage, AccountPage, AiFlowMixin, BooksPage,
                     ChaptersMixin, ConfigIOMixin, MorePage, OverviewPage,
                     RunMixin, SettingsPage, SetupMixin, TasksPage)
 from .theme import (COLOR, F, BrandButton, CheckBox, GradientBar, LogView,
-                    StatusBar, round_rect)
+                    StatusBar, bind_configure, round_rect)
 
 class MainWindow(AboutPage, AccountPage, AiFlowMixin, BooksPage,
                  ChaptersMixin, ConfigIOMixin, MorePage, OverviewPage,
@@ -279,8 +279,14 @@ class MainWindow(AboutPage, AccountPage, AiFlowMixin, BooksPage,
             (0, 0), window=self.content, anchor="nw")
 
         # 内容尺寸变化 → 更新滚动区域 + 是否需要滚动条
-        self.content.bind("<Configure>", self._on_content_configure)
-        self._scroll_canvas.bind("<Configure>", self._on_canvas_configure)
+        # ★★ 必须用守卫版（theme.bind_configure）：直接在 <Configure> 里改
+        #    Canvas 配置会**再触发一次 <Configure>**，macOS 上就变成
+        #    "Configure → 改配置 → Configure" 死循环 —— 实测主线程卡在
+        #    `self._scroll_canvas.configure(...)` 这一行，永远回不到事件循环。
+        bind_configure(self.content, self._on_content_configure)
+        bind_configure(self._scroll_canvas,
+                       lambda: self._set_scroll_width(
+                           self._scroll_canvas._cfg_w))
 
         # 滚轮（含日志面板等区域，用 bind_all 会互相抢，这里只绑画布与内容）
         for w in (self._scroll_canvas, self.content):
@@ -297,12 +303,20 @@ class MainWindow(AboutPage, AccountPage, AiFlowMixin, BooksPage,
         except Exception:
             pass
 
-    def _on_canvas_configure(self, event):
-        # 内嵌窗口宽度跟随画布，保证 fill="x" 的卡片能撑满
+    def _set_scroll_width(self, width: int):
+        """内嵌窗口宽度跟随画布，保证 fill="x" 的卡片能撑满。
+
+        （原来是 `_on_canvas_configure(event)`，现在由守卫版绑定调用，
+          尺寸从 `_cfg_w` 拿。）
+        """
         try:
-            self._scroll_canvas.itemconfig(self._scroll_win, width=event.width)
+            self._scroll_canvas.itemconfig(self._scroll_win, width=width)
         except Exception:
             pass
+
+    def _on_canvas_configure(self, event):
+        """保留老接口（守卫版绑定已经不走它了）。"""
+        self._set_scroll_width(event.width)
 
     def _on_scroll_set(self, first, last):
         """内容超高时才挂滚动条。"""
@@ -835,14 +849,15 @@ class NavItem(tk.Canvas):
         self._hover = False
         self._nw, self._nh = width, height
 
-        self.bind("<Configure>", self._on_config)
+        bind_configure(self, self._render_from_cfg)   # 守卫版（防 Configure 死循环）
         self.bind("<Enter>", self._on_enter)
         self.bind("<Leave>", self._on_leave)
         self.bind("<Button-1>", lambda e: self._cmd and self._cmd())
         self._render()
 
-    def _on_config(self, e):
-        self._nw, self._nh = e.width, e.height
+    def _render_from_cfg(self):
+        """由 `bind_configure` 调用（零参数）：用守卫记下的尺寸重绘。"""
+        self._nw, self._nh = self._cfg_w, self._cfg_h
         self._render()
 
     def _on_enter(self, _):

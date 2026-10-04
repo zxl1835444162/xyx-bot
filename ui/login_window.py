@@ -12,7 +12,7 @@ from typing import Callable, Optional
 
 from .theme import (
     COLOR, F, BrandButton, CheckBox, DarkEntry, GradientBar, Toast,
-    _lerp_color, round_rect,
+    _lerp_color, bind_configure, round_rect,
 )
 
 APP_NAME = "星月创作台"
@@ -140,7 +140,9 @@ class LoginWindow(tk.Toplevel):
                          highlightthickness=0, bd=0)
         left.pack(side="left", fill="y")
         left.pack_propagate(False)
-        left.bind("<Configure>", lambda e: self._draw_left(left))
+        # ★ 守卫版：Canvas 的 <Configure> 里 delete+重画会再触发 <Configure>，
+        #   macOS 上就是死循环（见 theme.bind_configure 的实测数据）
+        bind_configure(left, lambda: self._draw_left(left))
 
         # 右侧表单区（占满剩余宽度）
         right = tk.Frame(root, bg=COLOR["bg_root"], width=480)
