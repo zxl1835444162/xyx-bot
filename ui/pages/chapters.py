@@ -28,7 +28,7 @@ from ..defaults import (
     DEFAULT_REVIEW_TAB,
     DEFAULT_REVIEW_TIMEOUT,
 )
-from ..theme import COLOR, F, DarkEntry
+from ..theme import COLOR, F, DarkEntry, wheel_units
 
 
 class ChaptersMixin:
@@ -39,8 +39,10 @@ class ChaptersMixin:
 
         ★ 嵌套滚动处理：列表滚到顶/底后，把剩余滚动交给整页外层，
           这样鼠标停在列表上也能顺畅继续往下翻页。
+        ★ 步长走 theme.wheel_units（跨平台）—— 原来写死 `/120`，
+          macOS 上 delta 只有 ±1 会被算成 0，滚不动。
         """
-        delta = int(-event.delta / 120)
+        delta = wheel_units(event)
         try:
             first, last = self._ch_canvas.yview()
             at_top = first <= 0.0
@@ -49,7 +51,8 @@ class ChaptersMixin:
                 # 交给外层整页滚动
                 self._on_mousewheel(event)
                 return "break"
-            self._ch_canvas.yview_scroll(delta, "units")
+            if delta:
+                self._ch_canvas.yview_scroll(delta, "units")
         except Exception:
             pass
         return "break"

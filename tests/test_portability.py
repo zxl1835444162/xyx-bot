@@ -529,6 +529,120 @@ except ImportError:
                    and "runs-on:" in txt)
     print("         （没有 pyyaml → 只做了结构检查）")
 
+# ==================================================== ★ 字号缩放（macOS 字体太小）
+#
+# 用户反馈（2026-10-04）：「在 Mac 上字体太小」。
+# 根因不是字体选错，而是**同一套 point 字号在不同平台视觉大小差很多**，
+# 界面里 8/9/10pt 占绝大多数，macOS 上渲染偏小。
+# 修法是在 theme 里集中做**平台字号缩放**（macOS ×1.3）。
+# 这里锁住"这个机制必须存在且方向正确"。
+from ui import theme as _theme  # noqa: E402
+
+check_true("theme 暴露 font_scale()", callable(getattr(_theme, "font_scale", None)))
+check_true("theme 暴露 _scale_size()",
+           callable(getattr(_theme, "_scale_size", None)))
+if hasattr(_theme, "font_scale"):
+    _orig_key = _theme._platform_key
+
+    _theme._platform_key = lambda: "win32"
+    check("Windows 字号不缩放（8→8）", _theme._scale_size(8), 8)
+
+    _theme._platform_key = lambda: "darwin"
+    check_true("macOS 字号被放大（8→>8）", _theme._scale_size(8) > 8,
+               f"got {_theme._scale_size(8)}")
+    check_true("macOS 小字号放大更明显（9→≥11）", _theme._scale_size(9) >= 11,
+               f"got {_theme._scale_size(9)}")
+    _theme._platform_key = _orig_key
+
+# ==================================================== ★ 滚轮跨平台（macOS 滚不动）
+#
+# 用户反馈（2026-10-04）：「在 Mac 上只能拖动滑动条」。
+# 根因：所有滚动点写死 `int(-event.delta / 120)` —— 这是 **Windows 量纲**；
+# macOS 的 delta 只有 ±1，除完恒为 0 ⇒ 滚轮完全失效。
+# 修法：集中到 theme.wheel_units()，按平台换算。
+check_true("theme 暴露 wheel_units()",
+           callable(getattr(_theme, "wheel_units", None)))
+check_true("theme 暴露 bind_wheel()",
+           callable(getattr(_theme, "bind_wheel", None)))
+if hasattr(_theme, "wheel_units"):
+    class _Ev:
+        def __init__(self, delta=0, num=None):
+            self.delta = delta
+            self.num = num
+
+    _orig_key = _theme._platform_key
+
+    _theme._platform_key = lambda: "darwin"
+    _d_mac = _theme.wheel_units(_Ev(1))          # macOS 向上滚 delta=+1
+    check_true("macOS 滚轮不再恒为 0", _d_mac != 0, f"got {_d_mac}")
+    check_true("macOS 向上滚 → 负（与 Win 同向）", _d_mac < 0, f"got {_d_mac}")
+    check_true("macOS 向下滚 → 正",
+               _theme.wheel_units(_Ev(-1)) > 0)
+
+    _theme._platform_key = lambda: "win32"
+    _d_win = _theme.wheel_units(_Ev(120))
+    check_true("Windows 向上滚 → 负", _d_win < 0, f"got {_d_win}")
+    check_true("Windows 一格 120 → 有步长", _d_win != 0, f"got {_d_win}")
+
+    _theme._platform_key = lambda: "linux"
+    check_true("Linux Button-4（上）→ 负",
+               _theme.wheel_units(_Ev(0, 4)) < 0)
+    check_true("Linux Button-5（下）→ 正",
+               _theme.wheel_units(_Ev(0, 5)) > 0)
+    _theme._platform_key = _orig_key
+
+# ★ 代码里不许再有裸的 `/ 120` 量纲 —— 那是 macOS 滚不动的直接原因。
+# ★ 例外：`theme.wheel_units` 自己**必须**用 `/120`（那是 Windows 分支的
+#   正确实现）。所以只看"除 theme 之外"的文件。
+# ★ 判定方式：用 **AST 剥掉所有字符串常量**（注释和 docstring 里的说明文字
+#   会误伤 —— 实测 main_window 的注释里就提到过这句）。
+import ast as _ast  # noqa: E402
+
+
+def _code_without_strings(src: str) -> str:
+    try:
+        tree = _ast.parse(src)
+    except SyntaxError:
+        return src
+    for node in _ast.walk(tree):
+        if isinstance(node, _ast.Constant) and isinstance(node.value, str):
+            node.value = "\x00"
+    return _ast.unparse(tree)
+
+
+_bad_120 = []
+for _f in (ROOT / "ui").rglob("*.py"):
+    if _f.name == "theme.py":
+        continue
+    _code = _code_without_strings(_f.read_text(encoding="utf-8"))
+    for _i, _ln in enumerate(_code.splitlines(), 1):
+        if "delta" in _ln and "120" in _ln and "/" in _ln:
+            _bad_120.append(f"{_f.name}:{_i}: {_ln.strip()[:70]}")
+check_true("ui/（除 theme 外）没有写死 delta/120 的滚动量纲", not _bad_120,
+           "; ".join(_bad_120))
+
+# ★ 反过来：theme.wheel_units 必须**真的**按平台算，不能退化成只认一种量纲
+_wu_src = (ROOT / "ui" / "theme.py").read_text(encoding="utf-8")
+_wu = _wu_src.split("def wheel_units", 1)[-1].split("\ndef ", 1)[0]
+check_true("wheel_units 里对 macOS 做了单独处理",
+           "darwin" in _wu or "_platform_key" in _wu,
+           "wheel_units 没按平台分支")
+check_true("wheel_units 处理了 Linux 的 Button-4/5",
+           "num" in _wu and "4" in _wu and "5" in _wu,
+           "wheel_units 没处理 Linux 按钮事件")
+
+# ==================================================== ★ 分章通用性（防退化）
+#
+# 用户反馈（2026-10-04）：「分章功能分不出来，太草台班子，我要**通用**的」。
+# 根因：行首空白类只有 `[ \t]`，不含**全角空格 U+3000**（中文小说极常见）。
+# 这里做一条最便宜的静态兜底；完整用例见 tests/test_novel_split.py。
+from src.novel import CHAPTER_RE as _CRE  # noqa: E402
+
+check_true("分章正则的行首空白含全角空格 U+3000",
+           "\\u3000" in _CRE.pattern, _CRE.pattern[:70])
+check_true("分章正则支持「回/节/话/卷」等中文分节单位",
+           all(u in _CRE.pattern for u in ("回", "节", "话", "卷")))
+
 # ==================================================== 汇总
 print("\n" + "=" * 60)
 print(f"  通过 {len(PASS)} 项，失败 {len(FAIL)} 项")

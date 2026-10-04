@@ -41,7 +41,8 @@ from ..defaults import (
     DEFAULT_SHORTCUT,
 )
 from ..theme import (COLOR, F, BrandButton, Card, CheckBox, Collapsible,
-                     DarkEntry, DimLabel, TitleLabel, bind_configure)
+                     DarkEntry, DimLabel, TitleLabel, bind_configure,
+                     bind_wheel)
 from src.runplan import (Check, Progress, format_checks,
                          has_blocking_error, preflight)
 
@@ -482,7 +483,7 @@ class RunMixin:
         self._tpl_text.insert("1.0", "#@")
         self._tpl_text.bind("<KeyRelease>",
                             lambda e: self._update_tpl_preview())
-        self._tpl_text.bind("<MouseWheel>", self._on_mousewheel)
+        bind_wheel(self._tpl_text, self._on_mousewheel)
 
         quick = tk.Frame(b, bg=COLOR["bg_card"])
         quick.pack(anchor="w", pady=(8, 0))
@@ -521,7 +522,7 @@ class RunMixin:
                                     wrap="word", padx=10, pady=8)
         self._tpl_preview.pack(fill="x", pady=(4, 0))
         self._tpl_preview.configure(state="disabled")
-        self._tpl_preview.bind("<MouseWheel>", self._on_mousewheel)
+        bind_wheel(self._tpl_preview, self._on_mousewheel)
 
         # 兼容旧字段（chapters._update_tpl_preview 会用到 _ai_preview）
         self._ai_preview = None
@@ -600,7 +601,7 @@ class RunMixin:
                        lambda: self._ch_canvas.itemconfig(
                            self._ch_win, width=self._ch_canvas._cfg_w))
         for w in (self._ch_canvas, self._ch_list):
-            w.bind("<MouseWheel>", self._ch_scroll)
+            bind_wheel(w, self._ch_scroll)
 
         self._project = None
         self._ch_entries = {}
@@ -721,7 +722,7 @@ class RunMixin:
                                       highlightbackground=COLOR["border"],
                                       wrap="word", padx=8, pady=6)
         self._rv_instr_text.pack(fill="x", pady=(4, 0))
-        self._rv_instr_text.bind("<MouseWheel>", self._on_mousewheel)
+        bind_wheel(self._rv_instr_text, self._on_mousewheel)
 
         # 开关
         r5 = tk.Frame(b, bg=COLOR["bg_card"])

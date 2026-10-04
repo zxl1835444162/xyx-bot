@@ -51,7 +51,7 @@ jobs:
         shell: bash
         run: |
           set -e
-          for t in test_fixes test_waiting test_runplan test_memory test_portability test_font_cache test_configure_guard; do
+          for t in test_fixes test_waiting test_runplan test_memory test_portability test_font_cache test_configure_guard test_novel_split; do
             echo "=============================== $t ==============================="
             python "tests/$t.py"
           done

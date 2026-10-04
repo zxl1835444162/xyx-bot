@@ -28,7 +28,8 @@ from .pages import (AboutPage, AccountPage, AiFlowMixin, BooksPage,
                     ChaptersMixin, ConfigIOMixin, MorePage, OverviewPage,
                     RunMixin, SettingsPage, SetupMixin, TasksPage)
 from .theme import (COLOR, F, BrandButton, CheckBox, GradientBar, LogView,
-                    StatusBar, bind_configure, round_rect)
+                    StatusBar, bind_configure, bind_wheel, bind_wheel_all,
+                    round_rect, unbind_wheel_all, wheel_units)
 
 class MainWindow(AboutPage, AccountPage, AiFlowMixin, BooksPage,
                  ChaptersMixin, ConfigIOMixin, MorePage, OverviewPage,
@@ -287,8 +288,10 @@ class MainWindow(AboutPage, AccountPage, AiFlowMixin, BooksPage,
                            self._scroll_canvas._cfg_w))
 
         # 滚轮（含日志面板等区域，用 bind_all 会互相抢，这里只绑画布与内容）
+        # ★ 用 theme.bind_wheel：跨平台（Win/mac 的 <MouseWheel> + Linux 的
+        #   <Button-4/5>）——之前只绑 <MouseWheel>，Linux 上完全滚不动。
         for w in (self._scroll_canvas, self.content):
-            w.bind("<MouseWheel>", self._on_mousewheel)
+            bind_wheel(w, self._on_mousewheel)
             w.bind("<Enter>", lambda e: self._bind_wheel_all())
             w.bind("<Leave>", lambda e: self._unbind_wheel_all())
 
@@ -331,18 +334,25 @@ class MainWindow(AboutPage, AccountPage, AiFlowMixin, BooksPage,
         self._vbar.set(first, last)
 
     def _bind_wheel_all(self):
-        self.bind_all("<MouseWheel>", self._on_mousewheel)
+        bind_wheel_all(self, self._on_mousewheel)
 
     def _unbind_wheel_all(self):
-        self.unbind_all("<MouseWheel>")
+        unbind_wheel_all(self)
 
     def _on_mousewheel(self, event):
-        """★ 智能滚轮：只有内容真的超出时才滚，否则把事件交给别的控件。"""
+        """★ 智能滚轮：只有内容真的超出时才滚，否则把事件交给别的控件。
+
+        ★ 跨平台步长由 `theme.wheel_units` 统一换算 —— 之前写死
+          `int(-event.delta / 120)` 是 Windows 量纲，macOS 上 delta 只有 ±1，
+          除完恒为 0，**滚轮完全失效**（用户报「只能拖滚动条」的根因）。
+        """
         try:
             first, last = self._scroll_canvas.yview()
             if first <= 0.0 and last >= 1.0:
                 return          # 内容没超出，不滚
-            self._scroll_canvas.yview_scroll(int(-event.delta / 120), "units")
+            units = wheel_units(event)
+            if units:
+                self._scroll_canvas.yview_scroll(units, "units")
         except Exception:
             pass
 

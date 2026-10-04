@@ -38,22 +38,132 @@ from pathlib import Path
 from typing import List, Optional
 
 # ---------------------------------------------------------------- 分章正则
+#
+# ★★★ 用户需求（2026-10-04）：
+#   「为啥这个 txt 的分章功能，不能把他分出来？这也太草台班子了，
+#     我想做成**通用的**，而不是定制的」
+#
+#   根因：旧正则的行首空白类只有 `[ \t]`，**不含全角空格 U+3000**。
+#   而中文小说/微信导出的 txt 里，章节标题极常见地写成
+#       `　　第1章 订婚前夜的背叛`   （两个全角空格 = 段落缩进）
+#   ⇒ 一篇 101 章的小说，**一章都分不出来**。
+#
+#   所以这次不再是「打补丁多加一个字符」，而是重写成**多模式通用解析器**：
+#     * 行首空白：半角空格 / 制表符 / **全角空格** / 不换行空格，任意混合
+#     * 章节标记：第N章 / 第N回 / 第N节 / 第N话 / 第N卷… 以及「序章/楔子/
+#       引子/前言/尾声/番外」这类**无编号**特殊章
+#     * 包裹符号：【第1章】 / `第1章` / **第1章** / ## 第1章 / 第1章 标题
+#     * 数字：阿拉伯数字 / 中文数字 / 前导零（第001章）
+#     * 全角标点：：、．－　以及半角 : . -
+#
+#   设计要点：**每条模式必须整行命中（match + $）**，避免把正文里
+#   偶然出现的「第1章」当成标题 —— 这是分章最容易出错的地方。
 
-# 兼容这几种写法：
-#   **第1章 订婚前夜的背叛**
-#   ## 第1章 标题
-#   第1章 标题
-#   第1章：标题
+# 行首允许的空白：半角空格、制表符、全角空格(U+3000)、不换行空格
+_LEAD = r"[ \t\u3000\u00a0]*"
+# 行尾允许的空白（同样含全角）
+_TAIL = r"[ \t\u3000\u00a0]*"
+# 「第 1 章」中间允许穿插的空白
+_GAP = r"[ \t\u3000\u00a0]*"
+# 行内的「非换行空白」（含全角空格）—— 用于「标题前必须有分隔」
+_WS = r"[ \t\u3000\u00a0]"
+# 数字部分：阿拉伯 或 中文数字
+_NUM = r"[0-9０-９一二三四五六七八九十百千万零两〇]+"
+# 章 / 回 / 节 / 话 / 卷 / 集 / 篇 —— 中文小说常见的分节单位
+_UNIT = r"[章回节话卷集篇]"
+# 章号与标题之间**必须出现**的分隔符。
+#
+# ★★ 这里的「必须有」是分章正确性的关键：
+#     如果分隔符可以为空，「第一章正文。」这种**正文行**也会整行命中
+#     （`第一章` + 空分隔 + `正文。`），于是正文被误当成新章的标题，
+#     真正的章节标题反而因为 body 为空被过滤掉 —— 整本书一章都分不出来。
+#     ⇒ 所以：`第1章标题`（黏着）**不算**标题行，
+#       `第1章 标题` / `第1章：标题` / `第1章、标题` 才算。
+#
+# ★ 用法：用 **lookahead 断言**「章号后面要么行尾、要么是分隔符」，
+#   断言**不消耗字符**，于是标题捕获组能原样拿到「《龙之传说》杀青」
+#   （左书名号不会被吃掉）。
+#   合法分隔：空白 / 标点 / 开引号 / **收括号**（`【第1章】标题` 的 `】`）。
+_SEP_LOOKAHEAD = (r"(?=" + _WS + r"|$|[：:、.．。\-—－~～·]|"
+                  + r"[《〈「『“\"'‘【\[（(】\]）)」』])")
+# 标题前**允许被吃掉**的分隔符：空白 + 标点（冒号顿号等）。
+# ★ 为什么标点也要吃掉：否则 `第1章：标题` 会变成 `第1章 ：标题`（多一个冒号），
+#   用户看到的标题就不干净了。
+# ★ 但**开引号不能吃**（`第98章《龙之传说》` 的左书名号要留在标题里）。
+_SEP_SKIP = r"[：:、.．。\-—－~～· \t\u3000\u00a0]*"
+# 标题内容：不含换行、不含裸星号
+_TITLE = r"[^\n*]*?"
+
+CN_NUM = {c: i for i, c in enumerate("零一二三四五六七八九十")}
+CN_NUM.update({"两": 2, "百": 100, "千": 1000, "万": 10000, "〇": 0})
+
+
+def _cn_num_re_group() -> str:
+    """中文数字**字符类**内容（用于正则，务必配 `[...]` 使用）。
+
+    ★★ 注意：这里返回的是**字符集合**的成员，使用方必须写成字符类
+       `[<这些字符>]`。写成捕获组 `(...)` 是错的 —— 那样会被解释成
+       「这一串字符的**字面顺序**」，`(零一二三)` 只匹配子串 "零一二三"。
+       这个坑曾让 `Chapter 十二` 一条都匹配不上。
+    """
+    return "".join(CN_NUM.keys())
+
+
+# ---------------- 模式 1：带编号的「第N章」类（主力） ----------------
+# 允许的变体：
+#   　　第1章 订婚前夜的背叛     ## 第1章 标题     **第1章 标题**
+#   【第001章】标题              第 1 章 标题      第1章：标题
+#   第十二回 大闹天宫            第3节 尾声        第2话 觉醒
+#   第1章                        （只有章号，没有标题）
 CHAPTER_RE = re.compile(
-    r"^[ \t]*(?:#{1,6}[ \t]*)?(?:\*\*)?[ \t]*"
-    r"第[ \t]*([0-9一二三四五六七八九十百千万零两]+)[ \t]*章"
-    r"[ \t]*(?:[：:、.．\-—\s][ \t]*)?([^\n*]*?)"
-    r"[ \t]*(?:\*\*)?[ \t]*$",
+    # 行首空白 + 可选 markdown 井号 + 可选加粗星号 + 可选开括号
+    rf"^{_LEAD}(?:#{{1,6}}{_GAP})?(?:\*\*)?{_GAP}[【\[（(「『]?{_GAP}"
+    # 第 + 数字 + 单位（章/回/节/话/卷/集/篇）
+    rf"第{_GAP}({_NUM}){_GAP}({_UNIT})"
+    # 可选收括号
+    rf"{_GAP}[】\]）)」』]?"
+    # ★ 断言：后面必须是「行尾 或 分隔符」，否则不算标题行（防正文误伤）
+    rf"{_SEP_LOOKAHEAD}"
+    # 标题（可选）：先吃掉中间的分隔符空白，再抓标题正文
+    rf"{_SEP_SKIP}({_TITLE})"
+    # 可选闭合加粗星号
+    rf"{_GAP}(?:\*\*)?{_TAIL}$",
     re.MULTILINE,
 )
 
-CN_NUM = {c: i for i, c in enumerate("零一二三四五六七八九十")}
-CN_NUM.update({"两": 2, "百": 100, "千": 1000, "万": 10000})
+# ---------------- 模式 2：无编号的特殊章（序章 / 楔子 / 番外 …） ----------------
+# 这类章没有「第N章」，但确实是一章的开头。
+#   序章 / 楔子 / 引子 / 前言 / 序 / 尾声 / 后记 / 番外 / 终章 / 大结局
+# 允许带标题：序章 雪夜 / 番外一 番外的故事
+# ★ 同样要求：标记后面要么结束，要么有分隔符，避免「序章的故事」这种正文行
+#   被误判（正文里出现「序章」二字）。
+SPECIAL_WORDS = ("序章", "楔子", "引子", "前言", "序言", "尾声", "尾章",
+                 "后记", "终章", "大结局", "番外篇", "番外", "外传",
+                 "人物设定", "作者的话", "卷首语")
+# ★ 说明：**没有**单独列 `序` —— 它太常见（"顺序""次序"…），
+#   单开一行概率极低，收进来只会带来误伤。`序言`/`序章` 已覆盖绝大多数。
+SPECIAL_RE = re.compile(
+    rf"^{_LEAD}(?:#{{1,6}}{_GAP})?(?:\*\*)?{_GAP}[【\[（(「『]?{_GAP}"
+    rf"(序章|楔子|引子|前言|序言|尾声|尾章|后记|终章|大结局|"
+    rf"番外篇|番外|外传|人物设定|作者的话|卷首语)"
+    rf"{_GAP}[】\]）)」』]?"
+    rf"{_SEP_LOOKAHEAD}"
+    rf"{_SEP_SKIP}({_TITLE})"
+    rf"{_GAP}(?:\*\*)?{_TAIL}$",
+    re.MULTILINE,
+)
+
+# ---------------- 模式 3：英文 Chapter N（兼容翻译稿） ----------------
+# 数字用**贪婪** `+`（不是 `+?`），否则「Chapter 十二」只会吃到「十」。
+# ★ 中文数字必须是**字符类** `[...]`，不能写成 `(...)`（见 _cn_num_re_group 说明）。
+CHAPTER_EN_RE = re.compile(
+    rf"^{_LEAD}(?:#{{1,6}}{_GAP})?(?:\*\*)?{_GAP}"
+    rf"(?:Chapter|CHAPTER|chapter){_WS}+([0-9]+|[{_cn_num_re_group()}]+)"
+    rf"{_SEP_LOOKAHEAD}"
+    rf"{_SEP_SKIP}({_TITLE})"
+    rf"{_GAP}(?:\*\*)?{_TAIL}$",
+    re.MULTILINE,
+)
 
 
 def cn_to_int(s: str) -> Optional[int]:
@@ -136,41 +246,128 @@ class Chapter:
 
 # ---------------------------------------------------------------- 分章
 
+def _collect_candidates(text: str) -> List[dict]:
+    """扫全文，把三条模式命中的行都收进来（含位置，供排序/切片）。
+
+    三条模式互有重叠的可能性（比如「第1章」既能被中文模式命中、
+    也不会被英文模式命中），所以这里用**起始位置**去重，先到先得。
+    """
+    items: List[dict] = []
+    seen_start: set[int] = set()
+
+    def _add(m: "re.Match", num: Optional[int], title_rest: str,
+             kind: str) -> None:
+        if m.start() in seen_start:
+            return
+        seen_start.add(m.start())
+        items.append({
+            "start": m.start(),
+            "end": m.end(),
+            "no": num,
+            "rest": title_rest,
+            "kind": kind,
+        })
+
+    # 1) 第N章 / 第N回 …（编号第 1 组，单位第 2 组，标题第 3 组）
+    for m in CHAPTER_RE.finditer(text):
+        _add(m, cn_to_int(m.group(1)), m.group(3) or "", "num")
+    # 2) 序章 / 楔子 / 番外 …（标记第 1 组，标题第 2 组）
+    for m in SPECIAL_RE.finditer(text):
+        _add(m, None, (m.group(1) or "") + " " + (m.group(2) or ""),
+             "special")
+    # 3) Chapter N（编号第 1 组，标题第 2 组）
+    for m in CHAPTER_EN_RE.finditer(text):
+        _add(m, cn_to_int(m.group(1)), m.group(2) or "", "en")
+
+    items.sort(key=lambda x: x["start"])
+    return items
+
+
+def _make_title(x: dict, no: int) -> str:
+    """给一条候选生成展示用标题。"""
+    rest = clean_text(x.get("rest") or "")
+    # ★ 剥掉标题前导的**收括号**：`【第1章】标题` 这种，正则的收括号可选项
+    #   会和 lookahead 打架（回溯后 `】` 落进标题），这里统一擦掉。
+    rest = re.sub(r"^[】\]）)」』》]+", "", rest).strip()
+    if x.get("kind") == "special":
+        # 特殊章：rest 里已经含「序章 / 番外 …」，直接沿用
+        title = rest.strip()
+        if not title:
+            title = "序章"
+        return title
+    title = f"第{no}章"
+    if rest:
+        title += f" {rest}"
+    return title
+
+
 def split_novel(text: str) -> List[Chapter]:
-    """把小说全文按章拆开。
+    """把小说全文按章拆开（**通用**，覆盖中文小说常见写法）。
 
     返回 [Chapter, ...]；一章都没识别到则返回空列表。
+
+    兼容写法见文件顶部「分章正则」注释。核心是**整行命中**：
+    正文里随口提到的「第1章」不会被误当成标题。
     """
     text = text.replace("\r\n", "\n").replace("\r", "\n")
-    matches = list(CHAPTER_RE.finditer(text))
-    if not matches:
+    # 顺手去掉 BOM（有些 Windows 记事本另存会带 \ufeff）
+    text = text.lstrip("\ufeff")
+
+    items = _collect_candidates(text)
+    if not items:
         return []
 
-    # 先收集候选
+    # 按位置切正文
     raw_items = []
-    for i, m in enumerate(matches):
-        num_str = m.group(1)
-        rest = (m.group(2) or "").strip()
-        start = m.end()
-        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+    for i, x in enumerate(items):
+        start = x["end"]
+        end = items[i + 1]["start"] if i + 1 < len(items) else len(text)
         body = clean_text(text[start:end])
         raw_items.append({
-            "no": cn_to_int(num_str),
-            "rest": rest,
+            "no": x["no"],
+            "rest": x["rest"],
+            "kind": x["kind"],
             "body": body,
         })
 
     # ★ 过滤「目录残留」：没有任何正文的条目直接丢掉
+    #    （一本小说的目录页会连着出现几十行「第N章」，每行后面都没有正文）
     raw_items = [x for x in raw_items if x["body"]]
+    if not raw_items:
+        return []
+
+    # ★★ 章号归一（关键，别搞错）：
+    #   目标是「第N章」的 N 尽量等于**原书里的章号** —— 用户填细纲、
+    #   圈定跑章范围（第 3~10 章）都是按原书章号说的，串位就全错。
+    #
+    #   规则（简单且可预测）：
+    #     A. **全是编号章**，且编号严格递增不重复 → **原样用书里的号**
+    #        （99% 的小说都是这种，尤其是本站导出的 txt）
+    #     B. 只要**混进了特殊章**（序章/楔子/番外…），或编号有**重复/倒序**
+    #        → 整本改成顺序编号 1,2,3…
+    #        理由：有特殊章的书，号本来就不规整（序章 + 第1章 该谁当 #1？），
+    #        强行对齐只会让「第3章」在软件里变成「第4章」，更坑用户。
+    #        顺序编号保证：唯一、连续、不串位。
+    numbered = [x["no"] for x in raw_items if x["no"]]
+    has_special = any(not x["no"] for x in raw_items)
+    book_num_ok = True
+    seen: set = set()
+    last = 0
+    for n in numbered:
+        if n in seen or n <= last:
+            book_num_ok = False
+            break
+        seen.add(n)
+        last = n
+
+    use_book_num = book_num_ok and numbered and not has_special
 
     chapters: List[Chapter] = []
     for i, x in enumerate(raw_items):
-        no = x["no"] or (i + 1)
-        title = f"第{no}章"
-        rest = clean_text(x["rest"])
-        if rest:
-            title += f" {rest}"
-        chapters.append(Chapter(no=no, title=title, body=x["body"]))
+        no = x["no"] if (use_book_num and x["no"]) else (i + 1)
+        chapters.append(Chapter(no=no,
+                                title=_make_title(x, no),
+                                body=x["body"]))
 
     return chapters
 
