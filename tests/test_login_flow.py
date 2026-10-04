@@ -187,6 +187,44 @@ check_true("置顶会在 400ms 后撤掉，不长期霸占",
 check_true("任务置顶期间不会被 _present 的撤顶误伤",
            "_topmost_on" in _mw and "def _keep_on_top" in _mw)
 
+# ★★ 启动看门狗：卡死必须能自己把现场写下来
+#    用户的 mac 版是「主界面永远不出来 + 鼠标转圈」，而且我在别的机器上
+#    复现不了。没法复现就必须让**卡死自己报告卡在哪一行**。
+print("\n=== E. 启动看门狗（卡死要能自己写出主线程栈） ===")
+check_true("run_gui 有启动看门狗", hasattr(run_gui, "_install_startup_watchdog"))
+check_true("run_gui 有进度信标", hasattr(run_gui, "_beacon"))
+check_true("run_gui 有卡死报告函数", hasattr(run_gui, "_dump_hang"))
+check_true("看门狗只武装在启动阶段（起来后可撤）",
+           hasattr(run_gui, "_arm_watchdog") and hasattr(run_gui, "_disarm_watchdog"))
+check_true("阈值可以用环境变量调整",
+           "XYX_HANG_SECONDS" in _rg)
+check_true("主界面起来后会撤掉看门狗（否则正常 idle 会误报）",
+           "_disarm_watchdog()" in _rg)
+check_true("进度信标埋在关键节点上（登录窗/主界面）",
+           "_beacon(" in _rg and _rg.count("_beacon(") >= 5)
+
+# 真的调一次 _dump_hang，确认能把主线程栈写进日志
+from src import config as C  # noqa: E402
+
+_fatal = C.LOGS / "fatal.log"
+# ★ 只看**这次新追加**的那一段：报告里有"所有线程"一长串，
+#   用文件尾部 N 个字符去断言会被挤掉（我第一版就是这么错的）
+_before = _fatal.read_text(encoding="utf-8", errors="replace") \
+    if _fatal.exists() else ""
+run_gui._beacon("测试用信标")
+run_gui._dump_hang(99.0, "单元自检")
+_after = _fatal.read_text(encoding="utf-8", errors="replace") \
+    if _fatal.exists() else ""
+_added = _after[len(_before):]
+check_true("卡死报告写进了 fatal.log", len(_added) > 120,
+           f"只多了 {len(_added)} 字")
+check_true("报告里含主线程调用栈", "主线程调用栈" in _added)
+check_true("报告里含最后一次进展（便于定位阶段）", "测试用信标" in _added)
+check_true("报告里标了平台/是否打包（mac vs win 一眼区分）",
+           "平台：" in _added and "打包：" in _added)
+check_true("报告里给出了主线程的帧（能指到具体行）",
+           "run_gui.py" in _added or "test_login_flow.py" in _added)
+
 # ---------------------------------------------------------------- 汇总
 print("\n" + "=" * 60)
 print(f"  通过 {len(PASS)} 项，失败 {len(FAIL)} 项")

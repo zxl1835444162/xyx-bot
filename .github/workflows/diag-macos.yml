@@ -1,0 +1,89 @@
+name: diag-macos
+
+# 只做诊断，不产出东西。
+#
+# ★ 为什么单独开一个（2026-10-04）
+#   用户反馈 mac 版「登录界面正常，点确定后主界面永远不出来、鼠标一直转圈」。
+#   我在 Windows 上怎么测都没意义 —— 那是 macOS 特有的路径。
+#   而 GitHub 的 macOS runner 是**真 macOS**，之前偏偏测不出来，
+#   因为我一直用**英文 locale**，而用户的 Mac 是**中文 locale**。
+#
+#   这个 workflow 就是去真机上把 locale 这个变量拉出来对比：
+#     同一个包/同一份代码，在 C(英文) 和 zh_CN(中文) 下分别是什么表现。
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "tests/diag_macos_fonts.py"
+      - "tests/repro_login.py"
+      - ".github/workflows/diag-macos.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  diag:
+    name: diag (${{ matrix.locale }})
+    runs-on: macos-15
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - locale: C
+            apple_locale: en_US
+            apple_langs: '("en-US")'
+          - locale: zh_CN
+            apple_locale: zh_CN
+            apple_langs: '("zh-Hans-CN" "zh-Hans")'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-gui.txt
+
+      - name: 把系统语言/地区改成 ${{ matrix.locale }}
+        run: |
+          echo "改之前："
+          defaults read -g AppleLocale || true
+          defaults read -g AppleLanguages || true
+          defaults write -g AppleLocale -string "${{ matrix.apple_locale }}"
+          defaults write -g AppleLanguages -array ${{ matrix.apple_langs }}
+          echo "改之后："
+          defaults read -g AppleLocale || true
+          defaults read -g AppleLanguages || true
+
+      - name: "★ 字体层诊断（LC_ALL=${{ matrix.locale }}）"
+        env:
+          LANG: ${{ matrix.locale }}.UTF-8
+          LC_ALL: ${{ matrix.locale }}.UTF-8
+          LC_CTYPE: ${{ matrix.locale }}.UTF-8
+          XYX_NO_DIALOG: "1"
+        run: |
+          echo "环境: LC_ALL=$LC_ALL LANG=$LANG"
+          python tests/diag_macos_fonts.py
+        continue-on-error: true
+
+      - name: "★ 真实驱动一次 login → main（带看门狗，卡住会 dump 栈）"
+        env:
+          LANG: ${{ matrix.locale }}.UTF-8
+          LC_ALL: ${{ matrix.locale }}.UTF-8
+          LC_CTYPE: ${{ matrix.locale }}.UTF-8
+          XYX_NO_DIALOG: "1"
+          XYX_HANG_SECONDS: "10"
+        run: |
+          # 这个脚本用真实 mainloop 驱动登录→主界面；
+          # 主线程一旦卡住，看门狗会打印它卡在哪一行。
+          python tests/repro_login.py
+        continue-on-error: true
+
+      - name: 打完收工
+        run: echo "诊断结束（结果看上面的日志）"

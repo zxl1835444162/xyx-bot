@@ -8,7 +8,10 @@
 
 from __future__ import annotations
 
+import os
 import sys
+import threading
+import time
 import traceback
 from pathlib import Path
 
@@ -138,19 +141,124 @@ def launch_main(username: str) -> None:
     from ui.main_window import MainWindow
 
     def back_to_login() -> None:
+        _beacon("回到登录窗")
+        _arm_watchdog()
         LoginWindow(on_success=launch_main).mainloop()
 
+    _beacon("开始创建主界面 MainWindow")
     try:
-        MainWindow(username=username, on_logout=back_to_login).mainloop()
+        win = MainWindow(username=username, on_logout=back_to_login)
     except Exception:
+        _beacon("主界面创建失败")
         _show_fatal("主界面启动失败：\n\n" + traceback.format_exc())
+        raise
+    _beacon("主界面已创建，进入事件循环")
+    # ★ 主界面起来了 —— 之后主线程停在 mainloop 里是**正常**的，撤掉看门狗
+    _disarm_watchdog()
+    try:
+        win.mainloop()
+    except Exception:
+        _show_fatal("主界面运行失败：\n\n" + traceback.format_exc())
         raise
 
 
+# ================================================================ 启动看门狗
+#
+# ★★ 为什么需要（2026-10-04 用户 macOS 实测）
+# ================================================================
+# 现象：登录界面正常 → 点确定 → **登录窗消失、鼠标一直转圈、主界面永远不出来、
+#       没有任何报错**。
+#
+# "转圈"= 主线程被卡住（不是崩溃），所以既没有异常也没有弹窗。
+# 而这种"卡死"在别的机器上**复现不出来**（CI 的 macOS runner 上一路正常）。
+#
+# 没法复现就没法定位 —— 所以换个思路：**让卡死自己把现场写下来**。
+# 这里起一个后台线程盯着"启动进度"，只要主线程超过 N 秒没动静，
+# 就把**主线程的调用栈**（卡在哪一行）连同所有线程的栈写进
+# `artifacts/logs/fatal.log`。用户那边一卡，日志里就有确切答案。
+#
+# 只在**启动阶段**武装；主界面起来后主线程停在 mainloop 是正常的，就撤掉。
+
+_BEACON = {"label": "进程启动", "t": time.time()}
+_WATCHDOG_ON = False
+_HANG_SECONDS = float(os.getenv("XYX_HANG_SECONDS", "20") or 20)
+
+
+def _beacon(label: str) -> None:
+    """记一次"启动有进展"。"""
+    _BEACON["label"] = label
+    _BEACON["t"] = time.time()
+
+
+def _arm_watchdog() -> None:
+    global _WATCHDOG_ON
+    _WATCHDOG_ON = True
+    _beacon("等待登录")
+
+
+def _disarm_watchdog() -> None:
+    global _WATCHDOG_ON
+    _WATCHDOG_ON = False
+
+
+def _dump_hang(idle: float, why: str = "主线程停滞") -> None:
+    """把主线程卡在哪一行写进日志。"""
+    frames = sys._current_frames()
+    main_id = threading.main_thread().ident
+    lines = [
+        "=" * 68,
+        f"★ 启动卡死报告（{why}）",
+        f"  主线程已 {idle:.0f} 秒没有进展",
+        f"  最后一次进展：{_BEACON['label']}",
+        f"  平台：{sys.platform}  打包：{bool(getattr(sys, 'frozen', False))}",
+        "=" * 68,
+        "",
+        "--- 主线程调用栈（最下面是最外层入口；卡住的那一行在最上面）---",
+    ]
+    fr = frames.get(main_id)
+    if fr is not None:
+        lines.extend(l.rstrip() for l in traceback.format_stack(fr))
+    else:
+        lines.append("  （拿不到主线程栈）")
+    lines.append("")
+    lines.append("--- 所有线程 ---")
+    for tid, frame in frames.items():
+        lines.append(f"# 线程 {tid}"
+                     f"{'（主线程）' if tid == main_id else ''}")
+        lines.extend("  " + l.rstrip()
+                     for l in traceback.format_stack(frame))
+    text = "\n".join(lines)
+    print(text, file=sys.stderr)
+    _log_fatal(text)
+
+
+def _install_startup_watchdog() -> None:
+    """启动看门狗（后台线程，不需要主线程配合）。"""
+    def _loop() -> None:
+        reported = 0
+        while True:
+            time.sleep(1.0)
+            if not _WATCHDOG_ON:
+                continue
+            idle = time.time() - _BEACON["t"]
+            if idle >= _HANG_SECONDS and reported < 3:
+                reported += 1
+                try:
+                    _dump_hang(idle)
+                except Exception:
+                    pass
+    threading.Thread(target=_loop, name="startup-watchdog",
+                     daemon=True).start()
+
+
 def main() -> None:
-    # ★ 先装好回调异常处理器，再创建任何窗口
+    # ★ 先装好回调异常处理器和启动看门狗，再创建任何窗口
     try:
         _install_error_handler()
+    except Exception:
+        pass
+    try:
+        _install_startup_watchdog()
     except Exception:
         pass
 
@@ -184,6 +292,8 @@ def main() -> None:
         _show_fatal("初始化失败：\n\n" + traceback.format_exc())
         sys.exit(1)
 
+    _arm_watchdog()
+    _beacon("创建登录窗")
     try:
         LoginWindow(on_success=launch_main).mainloop()
     except Exception:
