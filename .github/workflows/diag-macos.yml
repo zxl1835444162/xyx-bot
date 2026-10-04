@@ -32,11 +32,9 @@ jobs:
       matrix:
         include:
           - locale: C
-            apple_locale: en_US
-            apple_langs: '("en-US")'
+            apple_cmds: 'defaults write -g AppleLocale -string "en_US" && defaults write -g AppleLanguages -array "en-US"'
           - locale: zh_CN
-            apple_locale: zh_CN
-            apple_langs: '("zh-Hans-CN" "zh-Hans")'
+            apple_cmds: 'defaults write -g AppleLocale -string "zh_CN" && defaults write -g AppleLanguages -array "zh-Hans-CN" "zh-Hans"'
 
     steps:
       - uses: actions/checkout@v4
@@ -51,12 +49,15 @@ jobs:
           pip install -r requirements-gui.txt
 
       - name: 把系统语言/地区改成 ${{ matrix.locale }}
+        # ★ 改不了也无所谓 —— 诊断本身才是重点，别让这一步把 job 挂掉。
+        #   （第一版写成 `-array ("en-US")`，括号被当成参数，defaults 直接退出 2。）
+        continue-on-error: true
         run: |
           echo "改之前："
           defaults read -g AppleLocale || true
           defaults read -g AppleLanguages || true
-          defaults write -g AppleLocale -string "${{ matrix.apple_locale }}"
-          defaults write -g AppleLanguages -array ${{ matrix.apple_langs }}
+          echo '${{ matrix.apple_cmds }}' > /tmp/setlang.sh
+          bash /tmp/setlang.sh || echo "（改 locale 失败，继续）"
           echo "改之后："
           defaults read -g AppleLocale || true
           defaults read -g AppleLanguages || true
