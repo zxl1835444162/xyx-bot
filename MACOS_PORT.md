@@ -415,6 +415,84 @@ cat ~/Library/Application\ Support/XYXBot/artifacts/logs/fatal.log
 
 ---
 
+## 三点七、★★★ 删掉登录界面之后**还是打不开** —— 真正的漏网点找到了
+
+> 2026-10-04 深夜。用户反馈：「**没删除之前，也是这个原因，不然我就不会
+> 删除登录页了，没想到现在**（还是打不开）」。
+>
+> 这句话很关键 —— 它说明「窗口架构（第 2 个 `tk.Tk()`）」**不是唯一原因**：
+> 换成「单 root + Toplevel」之后问题依旧。所以真正的机制必须是**与窗口
+> 架构无关**的东西。
+
+### 结论：就是 `<Configure>` 渲染风暴 —— 而且只漏了一处
+
+回头看 `tests/test_configure_guard.py` 里那份白名单：
+
+```python
+ALLOW_RAW = {
+    "ui/theme.py": "bind_configure 自己内部那一处 + Card.body（内部已有 != 判断）",
+}
+```
+
+**理由的后半句是假的。** `Card._resize_win()` 长这样：
+
+```python
+if need > 4 and c.winfo_reqheight() != need:
+    c.configure(height=need)        # ← 这行确实有 !=
+c.configure(scrollregion=c.bbox("all"))
+self.configure(height=need)         # ← 这行**没有** != 判断！
+```
+
+`self.configure(height=…)` 一旦真的改了尺寸，就会再发一个 `<Configure>`：
+
+```
+body <Configure> → _resize_win → self.configure(height) → self <Configure>
+                  → _redraw → _resize_win → self.configure(height) → …
+```
+
+macOS 的 Tk 对尺寸变化特别敏感（每次重绘都会再发一个 Configure），
+于是这条回路就转成了**每秒钟上万次的渲染风暴**，主线程永远回不到事件循环
+—— 就是用户看到的「界面不出来 + 鼠标转圈」。Windows 的 Tk 不这样，
+所以本机（以及 CI 的 windows / ubuntu）怎么测都是绿的。
+
+**这正好解释了「删掉登录页也没用」**：`Card` 是主界面自己的控件，
+只要构建主界面就会进入这条回路，**跟是第几个 `tk.Tk()` 完全无关**。
+
+### 改了什么
+
+| 文件 | 改动 |
+|---|---|
+| `ui/theme.py` | `Card.body` 的 `<Configure>` **改走守卫版 `bind_configure`**（尺寸没变就不重绘 + 全局每秒上限兜底） |
+| `ui/theme.py` | `_resize_win` 里 `self.configure(height=need)` **补上 `!=` 判断**；`scrollregion` 也加 `!=`（值没变就不写） |
+| `tests/test_configure_guard.py` | **收紧白名单**：从「按文件放行 theme.py」改成「**按函数**放行，只允许 `bind_configure` 自己内部那一处」；并新增一条断言，要求 `Card._resize_win` 里必须带 `!=` 判断 |
+
+收紧之后，`ALLOW_RAW` 那种「整文件放行」的口子没有了 —— 以后任何一处裸绑
+都会被 AST 检查当场逮住，不会再出现「白名单理由写错了、没人复核」的情况。
+
+### 在 Mac 上怎么验证这次真的修好了
+
+```bash
+# ① 自检（不建窗口，最稳）
+/Applications/XYXBot.app/Contents/MacOS/XYXBot --selftest
+
+# ② 连「窗口真的显示出来了吗」一起验（会真的跑事件循环）
+/Applications/XYXBot.app/Contents/MacOS/XYXBot --selftest --window
+```
+
+第 ② 条在 macOS 上会额外做两件事：**泵事件循环探测 `winfo_viewable()`**，
+并用 `screencapture` 存一张**全屏截图**当存证。输出里会明确写
+「主操控界面真的显示了」或「**没有显示出来**（viewable=False …）」，
+直接把这个输出发我即可。
+
+如果窗口还是不出来，现场在：
+
+```bash
+cat ~/Library/Application\ Support/XYXBot/artifacts/logs/fatal.log
+cat ~/Desktop/XYXBot-诊断.txt          # 启动进度 trail + 卡死时的主线程栈
+```
+
+---
+
 ## 四、平台适配清单（改了什么）
 
 | 位置 | 改动 | 为什么 |

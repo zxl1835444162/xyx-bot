@@ -422,7 +422,16 @@ class Card(tk.Frame):
 
         # ★ 用带守卫的绑定（原来直接 bind → macOS 上 Configure 死循环）
         bind_configure(self, self._redraw)
-        self.body.bind("<Configure>", lambda e: self._resize_win())
+        # ★★ Card.body 也走守卫版（2026-10-04）：
+        #   之前这里是**裸绑** `self.body.bind("<Configure>", …)`，被
+        #   `tests/test_configure_guard.py` 以「内部已有 != 判断」为由放行 ——
+        #   但那个理由只对 canvas 那行成立，`self.configure(height=need)`
+        #   并没有 `!=` 判断。macOS 上 Configure 每次重绘都会再发一次，
+        #   于是 body → _resize_win → self.configure(height) → self 的
+        #   Configure → _redraw → _resize_win → … 形成渲染风暴，
+        #   主线程回不到事件循环（用户看到的「界面出不来 + 鼠标转圈」）。
+        #   走 bind_configure 后：尺寸没变就不重绘 + 全局每秒上限兜底。
+        bind_configure(self.body, self._resize_win)
         # 初次布局兜底
         self.after(40, self._redraw)
         self.after(40, self._resize_win)
@@ -436,6 +445,11 @@ class Card(tk.Frame):
           这个高度的内容会被**直接裁掉**（AI 续写卡加到 6 行后就露馅了：
           底部「生成字数（自动采纳）」「一键续写」按钮完全看不见）。
           所以这里把 Canvas 的高度显式设成 body 的 reqheight + 上下留白。
+
+        ★★ 每一处 configure 都必须有 `!= 判断`（2026-10-04，macOS 风暴）
+           `configure(height=…)` 一旦真的改变了尺寸，就会再发一个
+           `<Configure>`。macOS 的 Tk 对这种变化特别敏感，不做「值没变就
+           不写」的判断就会自激。这里两个 height 都加了 !=，彻底断掉回路。
         """
         c = self._canvas
         try:
@@ -443,9 +457,12 @@ class Card(tk.Frame):
             need = self.body.winfo_reqheight() + top + self._pad
             if need > 4 and c.winfo_reqheight() != need:
                 c.configure(height=need)     # ← 关键：把内容高度告诉布局器
-            c.configure(scrollregion=c.bbox("all"))
+            if c.cget("scrollregion") != str(c.bbox("all")):
+                c.configure(scrollregion=c.bbox("all"))
             # 卡片本身也报这个高度，父容器才会给它空间
-            self.configure(height=need)
+            # ★ 必须判断「值真的变了」才写，否则每次 Configure 都写一次 → 自激
+            if need > 4 and self.winfo_reqheight() != need:
+                self.configure(height=need)
         except Exception:
             pass
 

@@ -70,11 +70,27 @@ def check_true(name: str, cond, detail: str = ""):
 print("=== ① 静态检查：所有 <Configure> 绑定都必须走 bind_configure ===")
 UI_FILES = sorted(list((ROOT / "ui").rglob("*.py")))
 
-#: 允许存在的裸绑定（都自带等价守卫），值 = 理由
-ALLOW_RAW = {
-    "ui/theme.py": "bind_configure 自己内部那一处 + Card.body（内部已有 != 判断）",
-}
-raw_binds = []
+
+def _enclosing_func(tree, lineno: int) -> str:
+    """找出 lineno 所在的函数名（最内层）。找不到返回 ""。"""
+    best = ("", -1)
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if node.lineno <= lineno <= (getattr(node, "end_lineno", node.lineno)
+                                         or node.lineno):
+                if node.lineno > best[1]:
+                    best = (node.name, node.lineno)
+    return best[0]
+
+
+# ★★ 2026-10-04 收紧：以前这里按「文件」整文件放行 theme.py，理由是
+#    「Card.body 内部已有 != 判断」—— **但那个理由是假的**：
+#    `_resize_win` 里 `self.configure(height=need)` 并没有 != 判断，
+#    于是在 macOS 上照样自激（body Configure → _resize_win →
+#    self.configure(height) → self Configure → _redraw → …）。
+#    现在改成**按函数**放行：只允许 `bind_configure` 自己内部那一处
+#    （它就是守卫实现本身），其它任何裸绑都算失败。
+raw_binds = []          # (rel, lineno, func_name)
 for p in UI_FILES:
     rel = p.relative_to(ROOT).as_posix()
     try:
@@ -88,17 +104,25 @@ for p in UI_FILES:
                 and node.args
                 and isinstance(node.args[0], ast.Constant)
                 and node.args[0].value == "<Configure>"):
-            raw_binds.append(f"{rel}:{node.lineno}")
-outside = [b for b in raw_binds if b.split(":")[0] not in ALLOW_RAW]
-check(f"ui/ 里除了 theme.py 没有裸 bind('<Configure>')（{outside}）",
-      len(outside), 0)
-print(f"         （theme.py 内允许的裸绑定 {len(raw_binds) - len(outside)} 处："
-      f"{ALLOW_RAW['ui/theme.py']}）")
+            raw_binds.append((rel, node.lineno, _enclosing_func(tree, node.lineno)))
 
-# 守卫函数的调用点
+outside = [f"{rel}:{ln}({fn})" for rel, ln, fn in raw_binds
+           if not (rel == "ui/theme.py" and fn == "bind_configure")]
+check(f"★ 全 ui/ 只有 bind_configure 内部一处裸绑（其余都走守卫）"
+      f"（{outside}）", len(outside), 0)
+_allowed = [f"{rel}:{ln}({fn})" for rel, ln, fn in raw_binds
+            if f"{rel}:{ln}({fn})" not in outside]
+print(f"         （允许的裸绑：{_allowed}）")
+
+# 守卫函数的调用点（含 Card.body 这个曾经的漏网点）
 _calls = sum(p.read_text(encoding="utf-8").count("bind_configure(")
              for p in UI_FILES)
 check_true(f"bind_configure 被真正用起来了（{_calls} 处引用/定义）", _calls >= 8)
+
+# ★★ 断掉自激的核心：写自身尺寸的地方必须有「值没变就不写」的判断
+_src = (ROOT / "ui" / "theme.py").read_text(encoding="utf-8")
+check_true("Card._resize_win 里 self.configure(height) 带 != 判断",
+           "self.winfo_reqheight() != need" in _src)
 
 # ==================================================== ② 速率闸门
 print("\n=== ② 全局每秒重绘上限（兜底，不依赖 Tk） ===")
