@@ -117,6 +117,15 @@ def watchdog() -> None:
             print(f"  ★ 卡死了：主线程已 {_idle():.1f} 秒没有任何进展", flush=True)
             print(f"     最后一次进展：{label}", flush=True)
             print(f"     平台：{sys.platform}", flush=True)
+            print(f"     ★ 计数：Configure={_STATS['configure']} "
+                  f"render={_STATS['render']} "
+                  f"create_text={_STATS['create_text']}", flush=True)
+            if _STATS["create_text"] > 5000 or _STATS["configure"] > 5000:
+                print("     → 计数暴增 = 渲染风暴（Configure↔重绘 互相触发）",
+                      flush=True)
+            else:
+                print("     → 计数很小 = 不是风暴，是某个调用真的阻塞住了",
+                      flush=True)
             print("!" * 72, flush=True)
             main_id = threading.main_thread().ident
             fr = sys._current_frames().get(main_id)
@@ -148,6 +157,56 @@ import run_gui  # noqa: E402
 from ui import theme  # noqa: E402
 import ui.login_window as LW  # noqa: E402
 import ui.main_window as MW  # noqa: E402
+
+# ---------------------------------------------------------------- 计数器
+# ★ 目的：区分"渲染风暴"和"真阻塞"。
+#   真机现场显示主线程卡在 ui/theme.py:559 create_text（由 <Configure> 触发），
+#   那到底是"Configure→重绘→Configure 无限循环"（CPU 打满），
+#   还是"create_text 本身阻塞"（CPU 空闲）？
+#   数量就能回答：卡死时计数上万 = 风暴；计数很小 = 阻塞。
+_STATS = {"configure": 0, "render": 0, "create_text": 0, "after_fired": 0}
+
+import tkinter as tk  # noqa: E402
+
+_orig_create_text = tk.Canvas.create_text
+
+
+def _ct(self, *a, **kw):
+    _STATS["create_text"] += 1
+    return _orig_create_text(self, *a, **kw)
+
+
+tk.Canvas.create_text = _ct
+
+for _cls in ("BrandButton", "GradientBar", "CheckBox", "StatusBar"):
+    _k = getattr(theme, _cls, None)
+    if _k is None or not hasattr(_k, "_render"):
+        continue
+    _or = _k._render
+
+    def _mk_render(_or):
+        def _r(self, *a, **kw):
+            _STATS["render"] += 1
+            return _or(self, *a, **kw)
+        return _r
+
+    _k._render = _mk_render(_or)
+    if hasattr(_k, "_on_configure"):
+        _oc = _k._on_configure
+
+        def _mk_cfg(_oc):
+            def _c(self, e, *a, **kw):
+                _STATS["configure"] += 1
+                return _oc(self, e, *a, **kw)
+            return _c
+
+        _k._on_configure = _mk_cfg(_oc)
+
+# ★ 不要包装 tk.Misc.after！试过：它会把每次 after 都注册成一个临时 Tcl 命令，
+#   控件销毁时 tkinter 的 deletecommand 会炸
+#   （AttributeError: 'NoneType' object has no attribute 'remove'），
+#   反而制造出一次**假卡死**（Windows 上本来 3.9 秒跑完，插桩后卡满 20 秒）。
+#   只数 configure/render/create_text 就够分辨"风暴 vs 阻塞"了。
 
 # 数一下字体解析次数（顺带守住"别反复枚举系统字体"）
 _real_resolve = theme._resolve_family
