@@ -157,6 +157,46 @@ check_true("报告里有最后一次进展", "测试用信标" in _added)
 
 # ==================================================== ④ 真驱动一次启动
 print("\n=== ④ 真驱动一次启动（update 泵事件，断言窗口真的显示） ===")
+
+
+def _drive_wanted() -> bool:
+    """要不要真的驱动事件循环。
+
+    ★★ 为什么不是无条件跑（2026-10-04 实测）
+    =====================================================================
+    驱动 Tk 事件循环（`mainloop()` 和 `update()` 都试过）在 **GitHub 的
+    macOS runner 上会阻塞** —— 那台 runner 没有真实窗口会话。实测后果：
+    build-macos 与 tests 的 macos job 都卡在这一步直到超时/被取消，
+    白白折腾十几分钟。
+
+    所以规则：
+      * `XYX_STARTUP_DRIVE=1` → 强制跑（本机手动验证用）
+      * macOS + CI 环境       → **跳过**（那台 runner 上不可能跑通）
+      * 其它（Windows 本机/CI、Linux 带 DISPLAY）→ 跑
+    静态与结构检查（①②③）在任何环境都会执行，那才是 CI 需要的那部分。
+    """
+    if os.getenv("XYX_STARTUP_DRIVE", "").strip() in ("1", "true", "yes"):
+        return True
+    if sys.platform.startswith("darwin") and os.getenv("CI"):
+        return False
+    return True
+
+
+if not _drive_wanted():
+    print("  SKIP：macOS + CI 环境驱动不了 Tk 事件循环"
+          "（那台 runner 没有真实窗口会话）")
+    print("        —— 静态与结构检查（①②③）已经跑过了；")
+    print("        要在这个环境强制跑：XYX_STARTUP_DRIVE=1")
+    print("\n" + "=" * 64)
+    print(f"  通过 {len(PASS)} 项，失败 {len(FAIL)} 项（④ 已跳过）")
+    if FAIL:
+        print("  失败列表：")
+        for f in FAIL:
+            print(f"    - {f}")
+    print("=" * 64)
+    sys.stdout.flush()
+    os._exit(1 if FAIL else 0)
+
 if sys.platform.startswith("linux") and not (
         os.getenv("DISPLAY") or os.getenv("WAYLAND_DISPLAY")):
     print("  SKIP：本环境没有 DISPLAY（Linux headless）")

@@ -72,20 +72,10 @@ jobs:
         shell: bash
         run: |
           set -e
-          for t in test_fixes test_waiting test_runplan test_memory test_portability test_font_cache test_configure_guard; do
+          for t in test_fixes test_waiting test_runplan test_memory test_portability test_font_cache test_configure_guard test_startup; do
             echo "=============================== $t ==============================="
             python "tests/$t.py"
           done
-
-      - name: ★ 启动 → 主操控界面 回归（真实事件循环，卡住就别打包了）
-        # ★ macOS 上「启动后界面出不来」的根因包括 <Configure> 渲染风暴。
-        #   这个测试用 update() 泵事件走完真实启动流程，断言主窗口**真的可见**，
-        #   并带看门狗 —— 卡住就直接 dump 主线程栈。
-        env:
-          XYX_NO_DIALOG: "1"
-          XYX_HANG_SECONDS: "20"
-          XYX_PUMP_SECONDS: "10"
-        run: python tests/test_startup.py
 
       - name: 写入构建信息（方便远程确认"用户装的是哪个版本"）
         shell: bash
