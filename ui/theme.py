@@ -103,6 +103,97 @@ MONO_FONT_CANDIDATES = {
 _CJK_HINTS = ("pingfang", "hiragino", "heiti", "songti", "kaiti",
               "苹方", "黑体", "宋体", "楷体", "冬青", "华文", "雅黑")
 
+
+# ---------------------------------------------------------------- ★ Configure 守卫
+#
+# ★★★ 这里修的是 macOS 上「点登录后鼠标转圈、主界面永远不出来」的**直接原因**
+# =====================================================================
+#
+# 实测（GitHub 的 macOS runner，真机，tests/repro_login.py 带计数器版本）：
+#
+#     ★ 卡死了：主线程已 10.3 秒没有任何进展
+#        最后一次进展：MainWindow.__init__ 结束      ← 主窗**已经建好了**
+#        ★ 计数：Configure=97968  render=98029  create_text=126038
+#
+# 10 秒内 `<Configure>` 触发 **9.8 万次**、重绘 **9.8 万次**、
+# `create_text` **12.6 万次** —— 每秒约一万次。主线程全耗在这个循环里，
+# **永远回不到事件循环**，于是 `after` 定时器不触发、窗口不绘制、
+# 鼠标一直转圈。同一份代码在 Windows 上全程只有 32 次 Configure。
+#
+# 原因：在 `<Configure>` 回调里 delete + 重建画布内容（或在里面
+# `place_configure` 子控件），会**再触发一次 `<Configure>`**。
+# macOS 的 Tk 每次重绘都会再发一个 Configure，于是：
+#
+#     Configure → 重绘 → Configure → 重绘 → …（无限）
+#
+# 破法：**尺寸没变就不重绘**。再配一个全局速率上限兜底 ——
+# 万一将来又造出别的循环，界面最多降到约 6 帧/秒，绝不会被拖死。
+
+_REDRAW_BUDGET = {"t0": 0.0, "n": 0}
+_REDRAW_PER_SEC = 400          # 全局每秒重绘上限（正常界面远低于这个数）
+
+
+def _redraw_allowed() -> bool:
+    """全局重绘闸门：每秒超过 `_REDRAW_PER_SEC` 次就返回 False。"""
+    now = time.time()
+    if now - _REDRAW_BUDGET["t0"] >= 1.0:
+        _REDRAW_BUDGET["t0"] = now
+        _REDRAW_BUDGET["n"] = 0
+    _REDRAW_BUDGET["n"] += 1
+    return _REDRAW_BUDGET["n"] <= _REDRAW_PER_SEC
+
+
+def bind_configure(widget, redraw) -> None:
+    """把 `<Configure>` 绑成**带守卫的重绘**。新代码请一律用它。
+
+    ★ 为什么不能直接 `widget.bind("<Configure>", redraw)`：见上面那段实测数据。
+
+    守卫做两件事：
+      ① **尺寸和上次一样 → 直接返回**（这一条破掉实测到的死循环）；
+      ② 全局每秒重绘上限（`_redraw_allowed`）。超了就合并成一次延时重绘，
+         保证最终画对，但不会把主线程占死。
+
+    重绘回调里要读尺寸就读 `widget._cfg_w` / `widget._cfg_h`
+    （由本函数写入），别再去接 event —— 这样回调可以是零参数的。
+
+    Args:
+        widget: 要绑定的控件
+        redraw: 零参数可调用对象
+    """
+    def _on_cfg(event):
+        size = (event.width, event.height)
+        if getattr(widget, "_cfg_last", None) == size:
+            return                              # ★ 尺寸没变 → 不重绘（破循环）
+        widget._cfg_last = size
+        widget._cfg_w, widget._cfg_h = size
+        if not _redraw_allowed():
+            # 超预算：合并成一次延时重绘（保证最终画对，但不占死主线程）
+            if not getattr(widget, "_cfg_pending", False):
+                widget._cfg_pending = True
+
+                def _late():
+                    widget._cfg_pending = False
+                    try:
+                        redraw()
+                    except Exception:
+                        pass
+
+                try:
+                    widget.after(150, _late)
+                except Exception:
+                    pass
+            return
+        try:
+            redraw()
+        except Exception:
+            # 重绘出错不能把事件循环带走（否则又变成"卡住没反应"）
+            import traceback as _tb
+
+            print("[ui] Configure 重绘失败：\n" + _tb.format_exc(),
+                  file=sys.stderr)
+
+    widget.bind("<Configure>", _on_cfg)
+
 _FONT_CACHE: dict = {}
 #: 系统字体表：**小写名 → 原始名**。None = 还没枚举过；{} = 枚举过但失败
 #:   ★ 必须留原始名：Tk 认的是原始大小写，把 'PingFang SC' 写成
@@ -324,7 +415,8 @@ class Card(tk.Frame):
             pad, pad, anchor="nw", window=self.body
         )
 
-        self.bind("<Configure>", self._redraw)
+        # ★ 用带守卫的绑定（原来直接 bind → macOS 上 Configure 死循环）
+        bind_configure(self, self._redraw)
         self.body.bind("<Configure>", lambda e: self._resize_win())
         # 初次布局兜底
         self.after(40, self._redraw)
@@ -468,7 +560,7 @@ class GradientBar(tk.Canvas):
             highlightthickness=0, bd=0, **kw
         )
         self._colors = colors or GRADIENT_BRAND
-        self.bind("<Configure>", self._draw)
+        bind_configure(self, self._draw)      # 守卫版（防 macOS Configure 死循环）
 
     def _draw(self, event=None):
         self.delete("grad")
@@ -508,7 +600,7 @@ class BrandButton(tk.Canvas):
         self._font = F(font_size, True)
         # 首次绘制用构造尺寸；组件真正布局后再按实际尺寸重绘
         self._render(width, height)
-        self.bind("<Configure>", self._on_configure)
+        bind_configure(self, self._render_from_cfg)   # 守卫版（防死循环）
 
         self.bind("<Enter>", self._on_enter)
         self.bind("<Leave>", self._on_leave)
@@ -542,8 +634,12 @@ class BrandButton(tk.Canvas):
             return base, "#ffffff", base
         return COLOR["bg_input"], COLOR["text"], COLOR["border"]
 
-    def _on_configure(self, event):
-        self._btn_w, self._btn_h = event.width, event.height
+    def _render_from_cfg(self):
+        """由 `bind_configure` 调用（零参数）：用守卫记下的尺寸重绘。
+
+        ★ 尺寸是否变化由 `bind_configure` 判断 —— 尺寸没变它压根不会调这里。
+        """
+        self._btn_w, self._btn_h = self._cfg_w, self._cfg_h
         self._render(self._btn_w, self._btn_h)
 
     def _render(self, w: int = None, h: int = None):
@@ -668,7 +764,10 @@ class DarkEntry(tk.Frame):
         # 点 Frame 内任何位置都聚焦到输入框（Canvas / 图标区 / 空白区）
         self._canvas.bind("<Button-1>", self._click_focus)
         self.bind("<Button-1>", self._click_focus)
-        self.bind("<Configure>", self._on_frame_config)
+        # ★ DarkEntry 的 Configure 里会 place_configure 输入框 ——
+        #   这正是最容易造成 "Configure→改子控件→再 Configure" 死循环的写法，
+        #   必须用守卫版。
+        bind_configure(self, self._on_frame_config_guarded)
 
         # 初始填占位符 + 画背景
         self._show_placeholder()
@@ -705,12 +804,19 @@ class DarkEntry(tk.Frame):
         """点 Canvas 空白区域也能聚焦到输入框。"""
         self.entry.focus_set()
 
-    def _on_frame_config(self, event):
-        self._redraw(event.width, event.height)
+    def _on_frame_config_guarded(self):
+        """由 `bind_configure` 调用（零参数）：尺寸从 `_cfg_w/_cfg_h` 取。
+
+        ★ 这里既重绘、又 `place_configure` 输入框 —— 正是最容易造成
+          "Configure → 改动子控件 → 再 Configure" 死循环的写法。
+          尺寸没变时 `bind_configure` 根本不会调到这里，循环就断了。
+        """
+        w, h = self._cfg_w, self._cfg_h
+        self._redraw(w, h)
         # 输入框跟随 Frame 尺寸
         self.entry.place_configure(
-            x=40, width=max(10, event.width - 56),
-            y=max(0, (event.height - 22) // 2),
+            x=40, width=max(10, w - 56),
+            y=max(0, (h - 22) // 2),
         )
 
     def _on_focus_in(self, _):
@@ -863,7 +969,7 @@ class StatusBar(tk.Canvas):
         self._status = "就绪"
         self._level = "info"
         self._version = version
-        self.bind("<Configure>", self._draw)
+        bind_configure(self, self._draw)      # 守卫版（防 macOS Configure 死循环）
 
     def set_status(self, text: str, level: str = "info"):
         self._status = text
@@ -901,14 +1007,15 @@ class CheckBox(tk.Canvas):
         self._hover = False
         self._cw, self._ch = width, height
 
-        self.bind("<Configure>", self._on_config)
+        bind_configure(self, self._render_from_cfg)   # 守卫版（防死循环）
         self.bind("<Enter>", self._on_enter)
         self.bind("<Leave>", self._on_leave)
         self.bind("<Button-1>", self._on_click)
         self._render()
 
-    def _on_config(self, e):
-        self._cw, self._ch = e.width, e.height
+    def _render_from_cfg(self):
+        """由 `bind_configure` 调用（零参数）：用守卫记下的尺寸重绘。"""
+        self._cw, self._ch = self._cfg_w, self._cfg_h
         self._render()
 
     def _on_enter(self, _):
