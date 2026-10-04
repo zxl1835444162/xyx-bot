@@ -110,8 +110,10 @@ jobs:
           echo "✓ Playwright driver: $DRV"
           echo "✓ 包结构检查通过"
 
-      - name: 冒烟：跑包内自检（不创建窗口，所以 runner 上也能跑）
+      - name: 冒烟：跑包内自检（含界面构造，不弹窗所以 runner 上也能跑）
         shell: bash
+        env:
+          XYX_NO_DIALOG: "1"        # 模态窗会把 runner 卡死
         run: |
           set -e
           BIN="dist/XYXBot.app/Contents/MacOS/XYXBot"
@@ -126,7 +128,14 @@ jobs:
           for kw in "核心依赖齐全" "数据可写" "Playwright"; do
             echo "$OUT" | grep -q "$kw" || { echo "✗ 自检输出里缺少「$kw」"; exit 1; }
           done
-          echo "✓ 包内自检通过"
+          # ★★ 界面部分：这一步会真的构造主窗口、构建 9 个页面，
+          #    并且复现「登录窗 → 销毁 → 主窗」这条真实路径。
+          #    打包产物特有的问题（缺模块 / 平台差异）只有在这里才暴露。
+          for kw in "主窗口 + 9 个页面全部构建成功" "登录窗销毁后，仍能创建主窗口"; do
+            echo "$OUT" | grep -q "$kw" \
+              || { echo "✗ 界面冒烟没通过（缺「$kw」）"; exit 1; }
+          done
+          echo "✓ 包内自检 + 界面构造冒烟通过"
 
       - name: 压缩（ditto 保留权限与符号链接）
         shell: bash

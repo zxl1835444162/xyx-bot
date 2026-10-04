@@ -656,13 +656,14 @@ def cmd_prepare() -> None:
 
 
 def cmd_selftest() -> None:
-    """环境自检：不开窗口，检查 tkinter / 数据目录 / Playwright / 浏览器内核。
+    """环境自检：检查 tkinter / 数据目录 / Playwright / 浏览器内核，
+    并且**真的把界面构造一遍**（打包版排障和 CI 验证都靠它）。
 
-    打包版排障和 CI 验证都靠它（见 src/selftest.py）。
+    加 `--no-ui` 可以跳过界面冒烟，只做环境检查。
     """
     from src.selftest import run_selftest
 
-    sys.exit(run_selftest())
+    sys.exit(run_selftest(smoke_ui="--no-ui" not in sys.argv))
 
 
 def cmd_diag() -> None:

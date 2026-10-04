@@ -24,9 +24,10 @@ from __future__ import annotations
 import os
 import platform
 import sys
+import traceback
 from pathlib import Path
 
-__all__ = ["run_selftest", "collect_facts"]
+__all__ = ["run_selftest", "collect_facts", "smoke_main_window"]
 
 
 def _disp_width(s: str) -> int:
@@ -183,8 +184,122 @@ def collect_facts() -> dict:
     return f
 
 
-def run_selftest(verbose: bool = True) -> int:
-    """跑一遍自检并打印。返回进程退出码（0 = 可以启动）。"""
+def _has_display() -> tuple:
+    """(有没有可用图形会话, 说明)。"""
+    try:
+        import tkinter as tk
+
+        r = tk.Tk()
+        r.withdraw()
+        r.destroy()
+        return True, "可用"
+    except Exception as e:
+        return False, f"{type(e).__name__}: {e}"
+
+
+def smoke_main_window(verbose: bool = True) -> int:
+    """★ 真的把「登录窗 → 主界面」这条路走一遍（只构造，不进事件循环）。
+
+    ★★ 为什么必须做这个（2026-10-04 用户实测：macOS 上「输完授权码进不去」）
+    =====================================================================
+
+    打包成 .app 后 `console=False`，**stderr 是断的**。而真实流程是：
+
+        LoginWindow._enter()          # 在 self.after(...) 回调里
+            self.destroy()            # 登录窗先销毁
+            self._on_success(user)    # → launch_main → MainWindow(...)
+                                      #   这里一抛异常，Tk 就把它交给
+                                      #   report_callback_exception，
+                                      #   默认只 print 到 stderr（= 无处可去）
+
+    用户看到的就是：登录窗消失、主界面不出现、**没有任何提示**。
+
+    所以这里做两件事，覆盖两种可能的根因：
+      [1] 直接构造主窗口 + 把 9 个页面都构建一遍
+          → 抓「某个页面/某个模块在打包产物里缺失」
+      [2] 复现真实顺序：先建登录窗、销毁、再建主窗口
+          → 抓「同一个进程里前后建两个 Tk root」这类平台差异
+            （macOS 的 Aqua Tk 对多 root / 重建 root 一向更挑剔）
+
+    Returns:
+        0 = 都通过（或没有图形会话，跳过）；1 = 有失败
+    """
+    def _out(s: str) -> None:
+        if verbose:
+            print(s)
+
+    ok, detail = _has_display()
+    if not ok:
+        _out(f"  跳过界面冒烟：当前没有图形会话（{detail}）")
+        return 0
+
+    rc = 0
+
+    # ---- [1] 全新 root 直接构造主窗口 + 构建所有页面 ----
+    _out("  [1/2] 构造主窗口，并逐个构建 9 个页面 …")
+    try:
+        from ui.main_window import MainWindow
+
+        win = MainWindow(username="selftest")
+        win.withdraw()
+        pages = ("run", "setup", "more", "overview", "account",
+                 "books", "tasks", "settings", "about")
+        failed_pages = []
+        for key in pages:
+            try:
+                win.show_page(key)
+            except Exception as e:
+                failed_pages.append(f"{key}: {type(e).__name__}: {e}")
+        if failed_pages:
+            rc = 1
+            _out("        ✗ 这些页面构建失败：")
+            for f in failed_pages:
+                _out("           " + f)
+        else:
+            _out("        ✓ 主窗口 + 9 个页面全部构建成功")
+        try:
+            win.destroy()
+        except Exception:
+            pass
+    except Exception:
+        rc = 1
+        _out("        ✗ 主窗口构造失败：")
+        for line in traceback.format_exc().splitlines():
+            _out("           " + line)
+
+    # ---- [2] 复现真实路径：登录窗 → 销毁 → 主窗口 ----
+    _out("  [2/2] 复现真实顺序：登录窗 → 销毁 → 主窗口 …")
+    try:
+        from ui.login_window import LoginWindow
+        from ui.main_window import MainWindow
+
+        lw = LoginWindow(on_success=lambda u: None)
+        lw.withdraw()
+        lw.destroy()
+        win2 = MainWindow(username="selftest")
+        win2.withdraw()
+        _out("        ✓ 登录窗销毁后，仍能创建主窗口")
+        try:
+            win2.destroy()
+        except Exception:
+            pass
+    except Exception:
+        rc = 1
+        _out("        ✗ 失败 —— 这正是「输完授权码进不去主界面」的那条路：")
+        for line in traceback.format_exc().splitlines():
+            _out("           " + line)
+
+    return rc
+
+
+def run_selftest(verbose: bool = True, smoke_ui: bool = False) -> int:
+    """跑一遍自检并打印。返回进程退出码（0 = 可以启动）。
+
+    Args:
+        verbose:  是否打印明细
+        smoke_ui: 是否额外**真的把界面构造一遍**（见 `smoke_ui`）。
+                  命令行的 `--selftest` 默认开；程序内部调用默认关。
+    """
     f = collect_facts()
 
     if verbose:
@@ -208,21 +323,34 @@ def run_selftest(verbose: bool = True) -> int:
         print(_line("浏览器内核", f["browser_detail"],
                     "" if f["browser_path"] else "（仅警告）"))
         print(_line("登录态", f["session_detail"]))
+
+    # ---- 界面能不能真的构造起来 ----
+    ui_rc = 0
+    if smoke_ui and f["tkinter_ok"]:
+        if verbose:
+            print("-" * 66)
+            print("  界面构造冒烟（重点：打包后最容易出问题的部分）")
+        # ★ 注意别写成 smoke_ui(...) —— 那是本函数的参数名，会遮蔽同名函数
+        ui_rc = smoke_main_window(verbose)
+
+    if verbose:
         print("-" * 66)
         if f["errors"]:
             print("  ✗ 有阻塞问题，程序无法正常运行：")
             for e in f["errors"]:
                 print(f"      · {e}")
+        elif ui_rc != 0:
+            print("  ✗ 环境本身没问题，但**界面构造失败**（见上面的堆栈）")
         else:
-            print("  ✓ 核心依赖齐全，可以启动")
+            print("  ✓ 核心依赖齐全，界面也能构造起来")
         if f["warnings"]:
             print("  ⚠ 提醒（不影响启动）：")
             for w in f["warnings"]:
                 print(f"      · {w}")
         print("=" * 66)
 
-    return 1 if f["errors"] else 0
+    return 1 if (f["errors"] or ui_rc != 0) else 0
 
 
 if __name__ == "__main__":
-    sys.exit(run_selftest())
+    sys.exit(run_selftest(smoke_ui="--no-ui" not in sys.argv))

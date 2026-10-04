@@ -55,4 +55,11 @@ jobs:
           done
 
       - name: GUI 测试（无窗口服务器时会自动 SKIP）
+        env:
+          XYX_NO_DIALOG: "1"        # 别让模态窗把 runner 卡住
         run: python tests/test_gui_pages.py
+
+      - name: 登录流程测试（登录窗 → 销毁 → 主界面）
+        env:
+          XYX_NO_DIALOG: "1"
+        run: python tests/test_login_flow.py
