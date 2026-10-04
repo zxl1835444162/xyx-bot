@@ -171,17 +171,15 @@ check_true("两个窗口都是 Toplevel（不是各自建 Tk root）",
 _sel = (ROOT / "src" / "selftest.py").read_text(encoding="utf-8")
 check_true("冒烟里会真的去建登录窗（复现用户那条路）",
            "LoginWindow(" in _sel)
-# ★ 只"构造"窗口是测不出"窗口没显示"的 —— 必须跑真实事件循环
-check_true("冒烟里有真实事件循环探测（mainloop + winfo_viewable）",
-           "mainloop()" in _sel and "winfo_viewable" in _sel)
-check_true("探测有兜底超时（after(ms + 3000, ...)），不会死等",
-           "ms + 3000" in _sel)
-# ★★ 但事件循环探测在 GitHub 的 macOS runner 上会**永久卡住**（实测踩过：
-#    两个 job 卡了 8 分钟以上只能手动取消），所以必须在 CI 里自动关闭。
-check_true("窗口探测默认关闭（macOS 上多次 mainloop 不可靠）",
-           "_window_probe_wanted" in _sel and "return v in (\"1\"" in _sel)
-check_true("可以用 XYX_SELFTEST_WINDOW 显式开关",
-           "XYX_SELFTEST_WINDOW" in _sel)
+# ★ 只"构造"窗口是测不出"窗口没显示"的 —— 必须驱动事件循环
+check_true("冒烟里有真实事件循环探测（update 泵 + winfo_viewable）",
+           "win.update()" in _sel and "winfo_viewable" in _sel)
+check_true("探测有次数/时间上限（不会死等）",
+           "limit = max" in _sel and "while time.time() - t0 < limit" in _sel)
+# ★★ 但这个探测在**没有真实窗口会话**的 runner 上会阻塞（mainloop 和 update
+#    都试过，都卡），所以必须默认关闭、只放在单独一步 + timeout 里跑。
+check_true("窗口探测默认关闭（避免在 CI runner 上阻塞）",
+           "XYX_SELFTEST_WINDOW" in _sel and 'return v in ("1"' in _sel)
 check_true("默认冒烟会 withdraw（不映射窗口，任何环境都安全）",
            "win.withdraw()" in _sel)
 _wf = (ROOT / ".github" / "workflows" / "build-macos.yml").read_text(

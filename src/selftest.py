@@ -300,19 +300,24 @@ def _screencapture(name: str) -> str | None:
 
 
 def _window_probe_wanted() -> bool:
-    """要不要做「窗口真的显示出来了吗」的探测。
+    """要不要做「窗口真的显示出来了吗」的探测。**默认关闭，需显式开启。**
 
-    ★ 2026-10-04：**默认开启**。
-      原来默认关掉是因为旧版探测要跑 `mainloop()` + `after`，而 GitHub 的
-      macOS runner 上定时器不触发，会把 job 卡死。
-      现在探测改用 `update()` 泵事件（不依赖定时器），既安全又能真正验出
-      "主窗口有没有显示出来" —— 这正是用户反馈的问题（「登录之后下一个
-      界面没了」），所以必须默认开。
+    ★★ 为什么默认关（2026-10-04 实测踩了两次）
+    =====================================================================
+    这个探测必须驱动 Tk 事件循环（先试 `mainloop()`+`after`，后改 `update()`
+    泵）。**两种写法在 GitHub 的 macOS runner 上都会阻塞** —— 那台 runner
+    没有真实窗口会话，一碰事件循环就卡住，把 job 拖到超时。
 
-      想关掉：`--no-window` 或 `XYX_SELFTEST_WINDOW=0`。
+    所以：
+      * 默认**不做**（`--selftest` 干净、快，CI 里当硬断言用）；
+      * 要验证"窗口到底显不显示"时显式开：
+          - `XYX_SELFTEST_WINDOW=1`，或命令行 `--window`
+          - CI 里放在**单独一步 + `timeout`** 里跑，只认明确结论，
+            超时就跳过（见 `.github/workflows/build-macos.yml`）。
+      * 用户自己的 Mac 有真实桌面会话，开了就能拿到结论。
     """
     v = os.getenv("XYX_SELFTEST_WINDOW", "").strip().lower()
-    return v not in ("0", "false", "no", "off")
+    return v in ("1", "true", "yes", "on")
 
 
 def smoke_main_window(verbose: bool = True,

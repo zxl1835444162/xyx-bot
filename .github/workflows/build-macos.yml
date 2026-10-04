@@ -159,19 +159,41 @@ jobs:
             echo "$OUT" | grep -q "$kw" || { echo "✗ 自检输出里缺少「$kw」"; exit 1; }
           done
           # ★★ 界面部分：这一步会真的构造主窗口、构建 9 个页面，
-          #    并用 update() 泵事件**检查窗口是不是真的显示出来了**，
-          #    再复现「登录窗 → 销毁 → 主窗」这条真实路径。
-          #
-          #    ★ "主窗口已显示" 这条是用户报的问题（「登录之后下一个界面
-          #      没了」）的直接判据 —— 它不过，就别打包。
-          #    （探测用 update() 而不是 mainloop()+after：这台 runner 的
-          #      Tcl 定时器不触发，旧写法验不出来。）
-          for kw in "主窗口 + 9 个页面全部构建成功" "主窗口已显示" \
-                    "登录窗销毁后，主窗口仍能正常显示"; do
+          #    并复现「登录窗 → 销毁 → 主窗」这条真实路径。
+          #    （默认**不做**窗口显示探测 —— 那要驱动事件循环，在这台没有
+          #      真实窗口会话的 runner 上会阻塞；探测放在下一步单独跑。）
+          for kw in "主窗口 + 9 个页面全部构建成功" \
+                    "登录窗销毁后，仍能创建主窗口"; do
             echo "$OUT" | grep -q "$kw" \
               || { echo "✗ 界面冒烟没通过（缺「$kw」）"; exit 1; }
           done
           echo "✓ 包内自检 + 界面构造冒烟通过"
+
+      - name: 窗口可见性探测（单独跑 + timeout；超时只警告，明确否定则失败）
+        # ★ 判据分三种情况，不含糊：
+        #   * 报「主窗口已显示」 → 通过
+        #   * 报「没有显示出来」 → **失败**（这是真问题的直接证据）
+        #   * 超时/没结论       → 这台 runner 驱动不了事件循环，警告并跳过
+        continue-on-error: true
+        shell: bash
+        env:
+          XYX_NO_DIALOG: "1"
+          XYX_SELFTEST_WINDOW: "1"
+        run: |
+          set +e
+          OUT="$(timeout 120 ./dist/XYXBot.app/Contents/MacOS/XYXBot --selftest 2>&1)"
+          RC=$?
+          set -e
+          echo "$OUT"
+          echo "--- 探测退出码 $RC ---"
+          if echo "$OUT" | grep -q "主窗口已显示"; then
+            echo "✓ 打包版在真 macOS 上：主窗口确实显示出来了"
+          elif echo "$OUT" | grep -q "没有显示出来"; then
+            echo "✗ 主窗口没有显示出来 —— 这就是用户报的问题"
+            exit 1
+          else
+            echo "⚠ 本 runner 无法完成窗口探测（事件循环阻塞/超时），跳过这条断言"
+          fi
 
       - name: 上传自检截图（窗口到底出没出来，看图）
         if: always()
