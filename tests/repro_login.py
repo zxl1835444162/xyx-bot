@@ -39,6 +39,7 @@ from __future__ import annotations
 import faulthandler
 import os
 import pathlib
+import subprocess
 import sys
 import threading
 import time
@@ -176,6 +177,96 @@ def watchdog() -> None:
 
 
 threading.Thread(target=watchdog, name="repro-watchdog", daemon=True).start()
+
+import tkinter as tk  # noqa: E402
+
+# ================================================================ ★ 不用 mainloop
+#
+# ★★ 为什么把 mainloop 换成 update() 泵（2026-10-04 关键突破）
+# =====================================================================
+# GitHub 的 macOS runner 上 `root.mainloop()` **不会处理定时器事件**
+# （没有真实窗口会话，CFRunLoop 的定时器源不被唤醒）—— 所以之前所有
+# "点完登录后窗口有没有出来"的验证在那个环境里都跑不了，我只能看到
+# "after 回调没触发"，误以为是 runner 限制就绕过去了。
+#
+# 而 `update()` 是"把所有**当前就绪**的事件处理掉"，包含已到期的定时器，
+# 不依赖 CFRunLoop 的定时器源。所以把 mainloop 换成一圈圈 `update()`，
+# 既能让真实的登录→主界面流程跑起来，也能检查窗口是否真的显示出来。
+_PUMP_SECONDS = float(os.getenv("XYX_PUMP_SECONDS", "10") or 10)
+_pump_stats = {"iters": 0, "secs": 0.0}
+PROBE: dict = {"visible_at": None, "geometry": None, "state": None,
+               "shot": None}
+
+
+def _snap(path: str) -> bool:
+    """抓一张屏幕截图。
+
+    ★ 只在 macOS 上用（内置 `screencapture`，不需要额外依赖）。
+      Windows/Linux 上直接跳过，别报无谓的错。
+    """
+    if not sys.platform.startswith("darwin"):
+        print("  [shot] 非 macOS，跳过截图", flush=True)
+        return False
+    try:
+        r = subprocess.run(["screencapture", "-x", path],
+                           capture_output=True, timeout=20)
+        if r.returncode == 0 and os.path.exists(path):
+            print(f"  [shot] 已截图 {path}", flush=True)
+            return True
+        print(f"  [shot] screencapture 失败 rc={r.returncode} "
+              f"{(r.stderr or b'')[:120]}", flush=True)
+    except Exception as e:
+        print(f"  [shot] 截图异常 {type(e).__name__}: {e}", flush=True)
+    return False
+
+
+def _pump_mainloop(self, n=0):        # noqa: ARG001 —— 签名要兼容 tkinter
+    """代替 `mainloop()`：用 `update()` 泵事件，最多泵 `_PUMP_SECONDS` 秒。
+
+    ★ 额外做一件关键的事：**盯着主窗口什么时候真的变成可见**，并截图存证。
+      这样"点完登录后窗口到底出没出来"就不再靠猜。
+    """
+    t0 = time.time()
+    shot_dir = pathlib.Path(os.getenv("XYX_SHOT_DIR", "artifacts/screenshots"))
+    shot_dir.mkdir(parents=True, exist_ok=True)
+    last_probe = 0.0
+    while time.time() - t0 < _PUMP_SECONDS and not DONE.is_set():
+        try:
+            self.update()
+        except Exception as e:
+            print(f"  [pump] update 抛异常：{type(e).__name__}: {e}",
+                  flush=True)
+            break
+        _pump_stats["iters"] += 1
+        # 每 0.4s 探一次主窗口可见性
+        if time.time() - last_probe > 0.4:
+            last_probe = time.time()
+            for w in list(INSTANCES):
+                try:
+                    if w.winfo_viewable():
+                        if PROBE["visible_at"] is None:
+                            PROBE["visible_at"] = round(time.time() - T0, 2)
+                            PROBE["geometry"] = w.geometry()
+                            PROBE["state"] = w.state()
+                            mark(f"★ 主窗口真的显示了（{PROBE['geometry']} "
+                                 f"state={PROBE['state']}）")
+                            p = str(shot_dir / "macos_after_login.png")
+                            if _snap(p):
+                                PROBE["shot"] = p
+                        break
+                except Exception:
+                    pass
+        time.sleep(0.005)
+    _pump_stats["secs"] = time.time() - t0
+    print(f"  [pump] 泵了 {_pump_stats['secs']:.1f}s / "
+          f"{_pump_stats['iters']} 次 update()", flush=True)
+    try:
+        self.quit()
+    except Exception:
+        pass
+
+
+tk.Misc.mainloop = _pump_mainloop
 
 # ================================================================ 准备
 print("=" * 72)
@@ -326,7 +417,13 @@ print("  结果")
 print("=" * 72)
 check("run_app 正常返回（没卡死、没异常）", rc, 0)
 check("主窗口被创建了 1 次", len(INSTANCES), 1)
-# ★★ 这一条是这次 bug 的核心：窗口建好 ≠ 事件循环活着
+# ★★ 这一条是这次 bug 的核心：窗口建好 ≠ 事件循环活着 ≠ 窗口真的显示出来
+check_true("★ 主窗口真的显示出来了（winfo_viewable 为真）",
+           PROBE["visible_at"] is not None,
+           "窗口没显示出来 —— 就是用户看到的「点完登录什么都没出现」")
+if PROBE["visible_at"] is not None:
+    print(f"         （在 {PROBE['visible_at']}s 时可见，"
+          f"{PROBE['geometry']} state={PROBE['state']}）")
 check_true("★ 主窗口的事件循环真的在跑（after 回调被触发）",
            VISIBLE_CHECKED["yes"],
            "窗口建好了但事件循环没跑 —— 就是 macOS 上那个卡死")
@@ -411,6 +508,10 @@ check_true("两个窗口都能接收共享 root（master 参数）",
 print(f"\n  字体解析调用 {font_calls['n']} 次，"
       f"枚举 {theme._FONT_DIAG.get('families_ms')} ms / "
       f"{theme._FONT_DIAG.get('families_count')} 个族")
+print(f"  图形重绘计数：create_text={_STATS['create_text']} "
+      f"render={_STATS['render']}（阈值 2000，超了就是渲染风暴）")
+print(f"  主窗口可见时刻：{PROBE['visible_at']}s"
+      f"{'  截图 ' + PROBE['shot'] if PROBE['shot'] else ''}")
 
 print()
 print("  时间线：")

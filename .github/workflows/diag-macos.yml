@@ -82,18 +82,29 @@ jobs:
         run: |
           python tests/diag_canvas_configure.py || true
 
-      - name: "★ 真实驱动一次 login → main（带看门狗，卡住会 dump 栈）"
+      - name: "★ 真实驱动一次 login → main（update() 泵事件 + 截图存证）"
+        # ★ 不用 mainloop：这台 runner 的 Tcl 定时器不触发，
+        #   改成 update() 泵事件（不依赖定时器），并直接截图 ——
+        #   这样"点完登录后窗口到底有没有出来"就不再靠猜。
         env:
           LANG: ${{ matrix.locale }}.UTF-8
           LC_ALL: ${{ matrix.locale }}.UTF-8
           LC_CTYPE: ${{ matrix.locale }}.UTF-8
           XYX_NO_DIALOG: "1"
-          XYX_HANG_SECONDS: "10"
+          XYX_HANG_SECONDS: "25"
+          XYX_PUMP_SECONDS: "12"
+          XYX_SHOT_DIR: "artifacts/screenshots"
         run: |
-          # 这个脚本用真实 mainloop 驱动登录→主界面；
-          # 主线程一旦卡住，看门狗会打印它卡在哪一行。
-          python tests/repro_login.py
-        continue-on-error: true
+          python tests/repro_login.py || true
+
+      - name: 上传截图（看主窗口到底出没出来）
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-shots-${{ matrix.locale }}
+          path: artifacts/screenshots/*.png
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: 打完收工
         run: echo "诊断结束（结果看上面的日志）"

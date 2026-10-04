@@ -24,6 +24,7 @@ from __future__ import annotations
 import os
 import platform
 import sys
+import time
 import traceback
 from pathlib import Path
 
@@ -220,38 +221,50 @@ def _has_display() -> tuple:
 
 
 def _probe_window(win, ms: int = 1200) -> dict:
-    """让事件循环真的跑一小会儿，回报窗口**到底有没有显示出来**。
+    """用 `update()` 泵事件，检查窗口**到底有没有显示出来**。
 
-    ★★ 这一步是之前所有测试的盲区（2026-10-04）：
-      之前的 GUI 测试只"构造"窗口、从不跑 mainloop，所以只能发现
-      "构造时抛异常"，**发现不了"窗口建好了但没显示/没到前台"**。
-      而用户反馈的正是"主界面出不来" —— 必须让事件循环跑起来才测得到。
+    ★★★ 为什么不用 `mainloop()` + `after`（2026-10-04 关键突破）
+    =====================================================================
+    原来这里是 `win.after(ms, ...)` + `win.mainloop()`。实测在 **GitHub 的
+    macOS runner** 上，`mainloop()` **根本不处理定时器事件**（没有真实窗口
+    会话，CFRunLoop 的定时器源不被唤醒）—— 于是 `after` 回调永远不触发，
+    我只能看到"没进展"，还一度把这条路径当成 runner 限制绕过去了，
+    结果真正的 bug（渲染风暴）和"窗口到底有没有显示"都验不出来。
 
-    用 `after` 取一次状态然后 `quit()`，另加一个兜底 `after` 防止卡死，
-    所以最多阻塞 ms+3000 毫秒。
+    `update()` 是"把所有**当前就绪**的事件处理掉"，包含已到期的定时器，
+    **不依赖 CFRunLoop 定时器源**。所以用它泵事件既能驱动真实流程，
+    也能可靠地检查 `winfo_viewable()`。
+
+    Args:
+        win: 要观察的窗口
+        ms: 最多泵多少毫秒
+
+    Returns:
+        {visible, geometry, state, secs, iters, error}
     """
-    res: dict = {}
-
-    def _grab():
+    res = {"visible": False, "geometry": None, "state": None,
+           "secs": None, "iters": 0}
+    t0 = time.time()
+    limit = max(0.05, ms / 1000.0)
+    if sys.platform == "darwin":
+        limit = max(limit, 6.0)      # macOS 上首帧要等窗口服务，给足时间
+    while time.time() - t0 < limit:
         try:
-            res["mapped"] = bool(win.winfo_ismapped())
-            res["viewable"] = bool(win.winfo_viewable())
-            res["state"] = win.state()
-            res["geometry"] = win.geometry()
-            res["screen"] = f"{win.winfo_screenwidth()}x{win.winfo_screenheight()}"
+            win.update()
         except Exception as e:
             res["error"] = f"{type(e).__name__}: {e}"
+            break
+        res["iters"] += 1
         try:
-            win.quit()
+            if win.winfo_viewable():
+                res["visible"] = True
+                res["geometry"] = win.geometry()
+                res["state"] = win.state()
+                res["secs"] = round(time.time() - t0, 2)
+                break
         except Exception:
             pass
-
-    try:
-        win.after(ms, _grab)
-        win.after(ms + 3000, win.quit)      # 兜底：绝不无限等
-        win.mainloop()
-    except Exception as e:
-        res.setdefault("error", f"{type(e).__name__}: {e}")
+        time.sleep(0.005)
     return res
 
 
@@ -259,35 +272,47 @@ def _visible(res: dict) -> tuple:
     """(是否真的显示出来了, 说明)。"""
     if res.get("error"):
         return False, f"探测出错：{res['error']}"
-    st = res.get("state", "?")
-    if res.get("viewable"):
-        return True, f"已显示（state={st} {res.get('geometry')}）"
-    return False, (f"**没显示出来**（state={st} mapped={res.get('mapped')} "
-                   f"geometry={res.get('geometry')}）")
+    if res.get("visible"):
+        return True, (f"已显示（{res.get('geometry')} state={res.get('state')}"
+                      f"，{res.get('secs')}s）")
+    return False, (f"**没有显示出来**（泵了 {res.get('iters')} 次 update()，"
+                   f"viewable=False geometry={res.get('geometry')} "
+                   f"state={res.get('state')}）")
+
+
+def _screencapture(name: str) -> str | None:
+    """macOS 上截一张全屏图（用于"窗口到底出没出来"的存证）。失败返回 None。"""
+    if not sys.platform.startswith("darwin"):
+        return None
+    try:
+        import subprocess
+
+        from src import config as C
+
+        p = C.SHOTS / name
+        r = subprocess.run(["screencapture", "-x", str(p)],
+                           capture_output=True, timeout=20)
+        if r.returncode == 0 and p.exists():
+            return str(p)
+    except Exception:
+        pass
+    return None
 
 
 def _window_probe_wanted() -> bool:
-    """要不要做「窗口真的显示出来了吗」的探测（会跑事件循环）。
+    """要不要做「窗口真的显示出来了吗」的探测。
 
-    ★ 默认**关闭**，只有显式要求（`XYX_SELFTEST_WINDOW=1` 或 `--window`）才做。
-    =====================================================================
+    ★ 2026-10-04：**默认开启**。
+      原来默认关掉是因为旧版探测要跑 `mainloop()` + `after`，而 GitHub 的
+      macOS runner 上定时器不触发，会把 job 卡死。
+      现在探测改用 `update()` 泵事件（不依赖定时器），既安全又能真正验出
+      "主窗口有没有显示出来" —— 这正是用户反馈的问题（「登录之后下一个
+      界面没了」），所以必须默认开。
 
-    原因（2026-10-04 实测，两次踩坑）：
-
-    ① 这个探测要跑真实 `mainloop()` 并让窗口映射到屏幕。在 **GitHub 的 macOS
-       runner** 上会**永久卡住** —— tests 的 macos job 与 build-macos 的两个
-       job 全都卡在包内自检那一步，跑了 8 分钟以上只能手动取消。
-
-    ② 更关键的是：这个探测需要在同一个进程里跑**多次** `mainloop()`。
-       而 macOS 上**第二次 `mainloop()`（以及第 2 个 `tk.Tk()`）的行为本来就
-       不可靠** —— 它会假报"窗口没显示"，把排查方向带偏。
-       （这正是本项目真正的 bug：见 `run_gui.run_app` 的说明。
-        后来定位靠的是"只跑一次真实 mainloop"的 `tests/repro_login.py`。）
-
-    所以这里保持关闭；要人工确认窗口能否显示时再加 `--window`。
+      想关掉：`--no-window` 或 `XYX_SELFTEST_WINDOW=0`。
     """
     v = os.getenv("XYX_SELFTEST_WINDOW", "").strip().lower()
-    return v in ("1", "true", "yes", "on")
+    return v not in ("0", "false", "no", "off")
 
 
 def smoke_main_window(verbose: bool = True,
@@ -356,7 +381,7 @@ def smoke_main_window(verbose: bool = True,
         from ui.main_window import MainWindow
 
         win = MainWindow(root, username="selftest")
-        win.withdraw()          # ★ 不映射窗口：CI 上映射会卡死
+        win.withdraw()          # 这一步只验证"能不能构造"，不需要显示
         pages = ("run", "setup", "more", "overview", "account",
                  "books", "tasks", "settings", "about")
         failed_pages = []
@@ -384,7 +409,7 @@ def smoke_main_window(verbose: bool = True,
 
     # ---- [2] 窗口到底显示出来了没有（只在允许时做）----
     if window_probe:
-        _out("  [2/3] 跑事件循环，检查主窗口是否真的显示出来 …")
+        _out("  [2/3] 用 update() 泵事件，检查主窗口是否真的显示出来 …")
         try:
             from ui.main_window import MainWindow
 
@@ -393,9 +418,16 @@ def smoke_main_window(verbose: bool = True,
             shown, why = _visible(probe)
             if shown:
                 _out(f"        ✓ 主窗口已显示  {why}")
+                # ★ macOS 上顺手截个图：CI 里可以直接看"窗口到底长什么样/有没有"
+                _p = _screencapture("selftest_main_window.png")
+                if _p:
+                    _out(f"        （已截图 {_p}）")
             else:
                 rc = 1
                 _out(f"        ✗ {why}")
+                _p = _screencapture("selftest_main_window_FAILED.png")
+                if _p:
+                    _out(f"        （已截图 {_p} —— 看看屏幕上到底有什么）")
             try:
                 win.destroy()
             except Exception:
