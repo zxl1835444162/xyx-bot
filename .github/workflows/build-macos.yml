@@ -136,31 +136,57 @@ jobs:
           ls -lh dist/*.zip
 
       - name: 打 DMG（Mac 上双击就能装的那种）
+        # ★ 实测：arm64 runner 上一次过，Intel runner 上偶发失败。
+        #   hdiutil 建映像本来就有偶发问题（资源忙/临时空间），
+        #   所以这里「重试 3 次 + 失败不阻断构建」——
+        #   DMG 只是便利，zip 才是主产物，不能因为它的偶发问题让整次构建红掉。
+        #   是否真的产出会在下一步显式检查并打印。
+        continue-on-error: true
         shell: bash
         run: |
-          set -e
           # ★ 为什么不只给 zip：.app 里有符号链接和可执行权限，
           #   用 zip 分发时用户必须 `ditto -x -k` 才能正确解压，
           #   直接双击解压有概率丢权限。DMG 是磁盘映像，天然保留一切，
           #   而且双击挂载 → 拖进「应用程序」就是 Mac 的标准安装动作。
           #   卷名用 ASCII，避免 CI shell 的编码问题。
-          hdiutil create \
-            -volname "XYXBot" \
-            -srcfolder dist/XYXBot.app \
-            -ov -format UDZO \
-            "dist/XYXBot-macos-${{ matrix.arch }}.dmg"
-          ls -lh dist/*.dmg
-          echo "--- 校验 DMG 结构 ---"
-          hdiutil imageinfo "dist/XYXBot-macos-${{ matrix.arch }}.dmg" | head -20
+          DMG="dist/XYXBot-macos-${{ matrix.arch }}.dmg"
+          for i in 1 2 3; do
+            echo "--- hdiutil 第 $i 次尝试 ---"
+            rm -f "$DMG"
+            if hdiutil create -volname "XYXBot" \
+                 -srcfolder dist/XYXBot.app -ov -format UDZO "$DMG"; then
+              echo "✓ DMG 创建成功"
+              ls -lh "$DMG"
+              hdiutil imageinfo "$DMG" | head -15
+              exit 0
+            fi
+            echo "第 $i 次失败，等 5 秒重试…"
+            sleep 5
+          done
+          echo "⚠ DMG 三次都没成功 —— 只上传 zip，构建继续"
+          exit 0
+
+      - name: 汇总产物
+        shell: bash
+        run: |
+          echo "=== dist/ ==="
+          ls -lh dist/ || true
+          test -f "dist/XYXBot-macos-${{ matrix.arch }}.zip" \
+            || { echo "✗ 连 zip 都没有"; exit 1; }
+          if [ -f "dist/XYXBot-macos-${{ matrix.arch }}.dmg" ]; then
+            echo "✓ 有 DMG"
+          else
+            echo "⚠ 这次没有 DMG（见上一步日志），zip 仍然可用"
+          fi
 
       - name: 上传产物
         uses: actions/upload-artifact@v4
         with:
           name: XYXBot-macos-${{ matrix.arch }}
-          # ★ 同时给 dmg（推荐，双击安装）和 zip（存档/兼容）
+          # ★ dmg（推荐，双击安装）+ zip（存档/兼容）
+          #   dmg 偶发缺失时不至于让上传报错（上面已显式检查过）
           path: |
-            dist/XYXBot-macos-${{ matrix.arch }}.dmg
-            dist/XYXBot-macos-${{ matrix.arch }}.zip
+            dist/XYXBot-macos-${{ matrix.arch }}.*
           if-no-files-found: error
           retention-days: 30
 
