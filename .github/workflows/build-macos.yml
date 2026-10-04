@@ -160,11 +160,22 @@ jobs:
           done
           echo "✓ 包内自检 + 界面构造冒烟通过"
 
-      - name: 窗口可见性探测（单独跑 + timeout；超时只警告，明确否定则失败）
+      - name: 窗口可见性探测（单独跑 + 可移植超时；超时只警告，明确否定则失败）
         # ★ 判据分三种情况，不含糊：
         #   * 报「主窗口已显示」 → 通过
         #   * 报「没有显示出来」 → **失败**（这是真问题的直接证据）
         #   * 超时/没结论       → 这台 runner 驱动不了事件循环，警告并跳过
+        #
+        # ★★ 2026-10-04 修一个**测试基础设施漏网**：
+        #   原来这里写的是 GNU 的 `timeout 120 …`，但 **macOS 没有 `timeout`**
+        #   （它是 GNU coreutils，macOS 只自带 BSD 工具；要么 brew install
+        #   coreutils 拿 `gtimeout`，要么用别的办法）。GitHub 的 mac runner
+        #   上没装，于是这一步**每次都 `timeout: command not found`、退出码
+        #   127**，再被下面的 else 分支当成「无结论 → 跳过」——
+        #   也就是说：**这条「窗口到底出没出来」的断言自诞生起从未真正执行过**，
+        #   一直显示绿色的 success，正是用户那个问题能在 CI 全绿下长期潜伏的原因。
+        #   改法：用 **perl** 做超时（macOS 自带 perl，Linux runner 也有），
+        #   并且把 rc=127 单独识别出来当**失败**报，杜绝再次静默吞掉。
         continue-on-error: true
         shell: bash
         env:
@@ -172,7 +183,25 @@ jobs:
           XYX_SELFTEST_WINDOW: "1"
         run: |
           set +e
-          OUT="$(timeout 120 ./dist/XYXBot.app/Contents/MacOS/XYXBot --selftest 2>&1)"
+          # 可移植超时：perl 自带 alarm，不依赖 coreutils 的 timeout/gtimeout
+          OUT="$(perl -e '
+            my $t = 120;
+            my $pid = fork();
+            if ($pid == 0) {
+              setpgrp(0, 0);
+              exec @ARGV;
+              exit 127;
+            }
+            $SIG{ALRM} = sub {
+              kill("TERM", -$pid);
+              sleep 2;
+              kill("KILL", -$pid);
+              exit 124;
+            };
+            alarm($t);
+            waitpid($pid, 0);
+            exit($? >> 8);
+          ' ./dist/XYXBot.app/Contents/MacOS/XYXBot --selftest 2>&1)"
           RC=$?
           set -e
           echo "$OUT"
@@ -182,8 +211,12 @@ jobs:
           elif echo "$OUT" | grep -q "没有显示出来"; then
             echo "✗ 主窗口没有显示出来 —— 这就是用户报的问题"
             exit 1
+          elif [ "$RC" = "124" ]; then
+            echo "⚠ 窗口探测超时（事件循环在这台 runner 上跑不动），跳过这条断言"
           else
-            echo "⚠ 本 runner 无法完成窗口探测（事件循环阻塞/超时），跳过这条断言"
+            # ★ 别再让「命令没跑起来」伪装成「跳过」——那是假绿
+            echo "✗ 窗口探测没有正常执行（退出码 $RC）"
+            exit 1
           fi
 
       - name: 上传自检截图（窗口到底出没出来，看图）

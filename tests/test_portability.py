@@ -428,6 +428,29 @@ check_true("tests.yml 覆盖三平台",
            all(x in wf_texts.get("tests.yml", "")
                for x in ("ubuntu-latest", "windows-latest", "macos-15")))
 
+# ★★ 2026-10-04 防回归：macOS runner 上**没有 GNU 的 `timeout`**
+#   它是 coreutils 的命令，macOS 只自带 BSD 工具。曾经 build-macos.yml 的
+#   「窗口可见性探测」用了 `timeout 120 …`，于是每次 `command not found`
+#   退出码 127，又被 else 分支当「无结论 → 跳过」，那条断言**从未真正跑过**，
+#   一直假绿 —— 用户的「界面出不来」就这么在 CI 全绿下潜伏了很久。
+#   这里扫一遍：runs-on 含 macos 的 workflow，不许在 run 脚本里裸用 `timeout`。
+_bm = wf_texts.get("build-macos.yml", "")
+# 只看「确实要执行」的行：以 timeout 开头，或 $() 里的 timeout，排除注释与
+# 我们自己写的「不许用 timeout」这类说明文字。
+_unwanted = []
+for _ln in _bm.splitlines():
+    _s = _ln.strip()
+    if _s.startswith("#"):
+        continue
+    if re.search(r"(^|[\s(\"'$])timeout\s+\d", _s):
+        _unwanted.append(_s)
+check_true("build-macos 不再裸用 GNU `timeout`（macOS 没有它）",
+           not _unwanted, "；".join(_unwanted)[:200])
+check_true("build-macos 的窗口探测改用可移植的 perl 超时",
+           "perl -e" in _bm and "SIG{ALRM}" in _bm)
+check_true("窗口探测把「没跑起来」当失败（不许静默假绿）",
+           "没有正常执行" in _bm)
+
 # YAML 能不能真的解析（有 pyyaml 就真解析，没有就退回结构检查）
 try:
     import yaml
