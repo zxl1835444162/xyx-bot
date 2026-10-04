@@ -215,6 +215,45 @@ check_true("main.py 真实代码里没有 max_retry=0",
 check_true("main.py CLI 把解析出的 max_retry 传下去",
            "max_retry=max_retry" in main_code)
 
+# ============================================ 5. 审稿填写加固
+print("\n=== 5. 审稿「追加指令」填写加固 ===")
+
+# ★ 用户问：「审稿追加指令的填写逻辑，不和续写填写的逻辑一致吗？
+#            怎么会有时候出现差错？」
+#   答：不一致。续写填的是**自造纯文本**，不依赖页面；
+#   审稿要**先读页面正文再拼接**，多一步"读"就多一个时序风险。
+#   本节的断言确保这些风险点已被堵住。
+
+check_true("存在 read_review_box（读站点自带正文）",
+           "def read_review_box" in ai_src)
+check_true("存在 read_body_settled（等正文就绪再读）",
+           "def read_body_settled" in ai_src)
+check_true("read_body_settled 优先读待审文本框",
+           "box = read_review_box(page)" in ai_src,
+           "应优先用站点填好的待审文本，避免读到上一章正文")
+check_true("读不到时才退回编辑器正文",
+           "退回用编辑器正文" in ai_src)
+check_true("拼接正文时用 read_body_settled 而非瞬时 get_body_text",
+           "body = read_body_settled(page)" in ai_src)
+check_true("不再在拼接处瞬时读正文",
+           "body = get_body_text(page) if read_body" not in ai_src,
+           "瞬时读会在编辑器重渲染时读到空/半截/上一章正文")
+check_true("open_chapter 之后会等正文就绪",
+           "read_body_settled(page, timeout=8.0)" in ai_src)
+check_true("ai_review 检查 fill_review_text 的返回值",
+           "if not fill_review_text(page" in ai_src,
+           "丢弃返回值会让「填失败」静默通过")
+check_true("待审文本填失败会终止审稿",
+           "ai_review_fill_failed" in ai_src)
+
+# _settle 判据强化（长度 + 前缀，而不是只比尾部 40 字）
+check_true("_settle 接受 head/want_len 参数",
+           "def _settle(expected: str, head: str, want_len: int)" in ai_src)
+check_true("_settle 会校验长度容差",
+           "tol = max(5, int(want_len * 0.02))" in ai_src)
+check_true("_settle 会校验前缀",
+           "if head and head not in cur" in ai_src)
+
 # ============================================ 汇总
 print("\n" + "=" * 60)
 print(f"  通过 {len(PASS)} 项，失败 {len(FAIL)} 项")

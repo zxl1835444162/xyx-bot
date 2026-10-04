@@ -2502,6 +2502,90 @@ def current_review_requirement(page: Page) -> str:
     return ""
 
 
+def read_review_box(page: Page) -> str:
+    """读「待审文本」框里**已有的内容**（站点自动带入的正文）。
+
+    ★★ 为什么这个比 `get_body_text` 更靠谱（2026-10-04 用户报障）：
+      用户观察得很准：「这个审稿框，打开的时候，就有内容了」——
+      站点**打开审稿面板时会自动把当前章正文填进「待审文本」框**。
+      这才是**权威来源**：它就是站点自己认为"该审的文本"。
+
+      而原实现是绕开这个框、去**编辑器**（`.tiptap.ProseMirror`）读正文，
+      再拼上指令一起覆盖。问题在于：
+        · 编辑器读的是**当前打开的那一章**，若章节切换有延迟，
+          可能读到**上一章的正文** —— 这就是"有时候出差错"的根源
+        · 编辑器可能还在重渲染 → 读到空
+
+      改为**优先读这个框**：读到的就是站点要审的东西，天然不会串章。
+
+    Returns: 框内文本；读不到返回 ""
+    """
+    for s in AI_SELECTORS["review_text"]:
+        try:
+            loc = page.locator(s)
+            if not loc.count():
+                continue
+            if not loc.first.is_visible():
+                continue
+            val = loc.first.input_value(timeout=400) or ""
+            if val.strip():
+                return val
+        except Exception:
+            continue
+    return ""
+
+
+def read_body_settled(page: Page, timeout: float = 6.0,
+                      min_len: int = 1) -> str:
+    """★ 等**待审文本框**里的正文就绪再读（2026-10-04 新增）。
+
+    ★★ 为什么需要（用户报「审稿追加指令有时候出现差错」）：
+      站点打开审稿面板时会**异步**把当前章正文填进「待审文本」框。
+      如果面板刚开就立刻读，读到的是**上一次的残留值**或**空串**。
+      这是"有时对、有时错"的典型特征 —— 取决于读取时机。
+
+    ★ 与续写的差别（用户问「不跟续写一致吗」）：
+      续写的 `fill_plot` 填的是**我们自己造的纯文本**，不依赖页面已有内容，
+      所以没有时序问题；审稿必须**先读站点给的内容再拼接**，多一步"读"，
+      就必然要有等待。
+
+    策略：
+      ① 优先等「待审文本框」出现**非空内容**（权威来源）
+      ② 超时仍为空 → 退回等**编辑器**正文（兼容"站点没自动带入"的版本）
+      ③ 都拿不到也返回最后一次结果，不阻塞流程，但留下明确日志
+    """
+    box = ""
+    body = ""
+
+    def _both_ok() -> bool:
+        nonlocal box, body
+        box = read_review_box(page)
+        if len(box.strip()) >= min_len:
+            return True
+        body = get_body_text(page)
+        return len(body.strip()) >= min_len
+
+    res = wait_until(_both_ok, timeout=timeout, interval=0.12,
+                     desc="待审文本就绪")
+
+    if box.strip():
+        if res.ok:
+            print(f"[ai] ✓ 待审文本框已就绪（{len(box)} 字，{res.elapsed:.2f}s）")
+        else:
+            print(f"[ai] ✓ 读到待审文本框（{len(box)} 字，等待超时但已有内容）")
+        return box
+
+    # 退化：框里没有，用编辑器正文
+    if not body:
+        body = get_body_text(page)
+    if body.strip():
+        print(f"[ai] ⚠ 待审文本框为空 → 退回用编辑器正文（{len(body)} 字）")
+    else:
+        print(f"[ai] ⚠ 等了 {timeout:.1f}s，待审文本框与编辑器都为空"
+              f"→ 追加指令将只填指令部分")
+    return body
+
+
 def fill_review_text(page: Page, text: str = "",
                      instruction: str = "",
                      read_body: bool = True) -> bool:
@@ -2522,6 +2606,16 @@ def fill_review_text(page: Page, text: str = "",
         - `text` 非空        → 直接用它（完全覆盖，不管正文）
         - 两个都空           → 沿用页面自带内容（不动）
 
+    ★★★ 加固（2026-10-04，用户报「有时候出现差错」）：
+      原实现有两处不够稳：
+        ① `body = get_body_text(page)` —— **瞬时读，不等待**。
+           编辑器重渲染的瞬间会读到空/半截/上一章正文。
+           现在改为 `read_body_settled(page)`，最多等 6s 直到正文非空。
+        ② `_settle()` 只取期望文本**尾部 40 字**去比对，且遍历所有匹配元素
+           （任一命中即算过）—— 判据偏弱，容易"填炸了也算成功"。
+           现在改为：**比对长度 + 前缀**，并要求**至少一个匹配元素**真的含
+           我们填的开头（instruction/text 的开头比尾部更不容易撞车）。
+
     Args:
         text:        显式待审文本；给了就完全覆盖（优先级最高）
         instruction: ★ 指令模板/要求，会跟当前章正文拼在一起
@@ -2531,50 +2625,72 @@ def fill_review_text(page: Page, text: str = "",
     Returns:
         bool 是否成功
     """
-    def _settle(expected: str) -> None:
+    def _settle(expected: str, head: str, want_len: int) -> bool:
         """★ 等填进去的内容真的在 textarea 里（替代固定 sleep 0.8s）。
 
-        原来填完固定等 0.8 秒就返回，其实内容早就写好了；
-        改成回读确认（顺带能发现"填了但没生效"的情况），通常几十毫秒。
+        判据（比原来强）：
+          · 文本长度接近期望（±2% 或 ±5 字）—— 防"只得一半"
+          · 且内容以我们填的**开头**为准（前缀匹配）—— 防填错框
+        任一匹配元素满足即算落盘成功。超时不抛异常，只返回 False。
         """
-        tail = expected.strip()[-40:] if expected.strip() else ""
-        if not tail:
-            return
-        wait_until(
-            lambda: any(
-                tail in (page.locator(s).first.input_value() or "")
-                for s in AI_SELECTORS["review_text"]
-                if page.locator(s).count()),
-            timeout=2.0, interval=0.06, desc="待审文本落盘")
+        if want_len <= 0:
+            return True
+        tol = max(5, int(want_len * 0.02))
+
+        def _ok() -> bool:
+            for s in AI_SELECTORS["review_text"]:
+                try:
+                    loc = page.locator(s)
+                    if not loc.count():
+                        continue
+                    cur = loc.first.input_value(timeout=200) or ""
+                except Exception:
+                    continue
+                if head and head not in cur:
+                    continue
+                if abs(len(cur) - want_len) <= tol:
+                    return True
+            return False
+
+        res = wait_until(_ok, timeout=3.0, interval=0.08, desc="待审文本落盘")
+        if not res.ok:
+            print("[ai] ⚠ 未能确认待审文本已完整落盘（内容长度/前缀对不上）")
+        return res.ok
 
     # ① 显式 text → 直接覆盖
     if text:
         print(f"[ai] --- 填写待审文本（显式 {len(text)} 字）---")
         ok = _fill_first(page, AI_SELECTORS["review_text"], text,
                          label="待审文本")
-        _settle(text)
+        _settle(text, text.strip()[:20], len(text))
         return ok
 
     # ② 正文 + 指令 拼接
+    #    ★★ 修正（2026-10-04）：读正文必须**等它渲染好**，不能瞬时读。
     if instruction:
-        body = get_body_text(page) if read_body else ""
-        if body:
-            full = (f"{instruction.strip()}\n\n"
+        body = read_body_settled(page) if read_body else ""
+        instr = instruction.strip()
+        if body.strip():
+            full = (f"{instr}\n\n"
                     f"————————以下为待审正文————————\n\n{body}")
-            print(f"[ai] --- 待审文本 = 指令({len(instruction)}字) "
+            print(f"[ai] --- 待审文本 = 指令({len(instr)}字) "
                   f"+ 正文({len(body)}字) = {len(full)} 字 ---")
+            head = instr[:20]          # 前缀取指令开头，稳定且不会撞车
         else:
-            full = instruction.strip()
+            full = instr
+            head = instr[:20]
             print(f"[ai] --- 待审文本 = 仅指令（{len(full)} 字，"
                   f"没读到正文）---")
         ok = _fill_first(page, AI_SELECTORS["review_text"], full,
                          label="待审文本")
-        _settle(full)
+        if ok:
+            _settle(full, head, len(full))
         return ok
 
     # ③ 都空 → 不动（沿用页面自带当前章内容）
     print("[ai] 待审文本：留空，沿用页面自带内容")
     return True
+
 
 
 def pick_review_requirement(page: Page, keyword: str = "",
@@ -3487,6 +3603,11 @@ def ai_review(page: Page,
     #      必须用 need_text=True 看正文是否真有内容。
     if not editor_ready(page, need_text=True):
         open_chapter(page, which=open_chapter, index=chapter_index)
+        # ★★ 修正（2026-10-04）：切完章必须**等正文真的渲染出来**再往下。
+        #    原实现切完章节就直接开抽屉，此时编辑器可能还在重渲染，
+        #    后面 fill_review_text 拼接时读到**空正文**或**上一章的旧正文**
+        #    —— 这正是用户说的「有时候出现差错」。
+        read_body_settled(page, timeout=8.0)
     else:
         print(f"[ai] 正文已就绪（{len(get_body_text(page))} 字），跳过打开章节")
 
@@ -3509,7 +3630,13 @@ def ai_review(page: Page,
                  card_hint=model_card_hint)
 
     # ③ 待审文本（显式覆盖 / 正文+指令拼接 / 沿用自带）
-    fill_review_text(page, text, instruction=instruction)
+    #    ★★ 修正（2026-10-04）：原来**丢弃返回值** —— 待审文本填失败也照样
+    #       往下走，结果是拿"页面自带内容"或空内容去审稿，用户看到的就是
+    #       「有时候审的不对」。现在失败直接终止并说明原因。
+    if not fill_review_text(page, text, instruction=instruction):
+        print("[ai] ✗ 待审文本填写失败 → 终止审稿（继续会审到空/错内容）")
+        _shot(page, "ai_review_fill_failed")
+        return False
 
     # ④ 审稿要求（先切 tab，再选提示词）
     if requirement:
