@@ -77,37 +77,56 @@ jobs:
       - name: PyInstaller 打包
         run: pyinstaller --clean --noconfirm packaging/macos/xyxbot.spec
 
-      - name: 校验产物（存在 / 可执行 / 架构 / 体积）
+      - name: 校验包结构（可执行 / 图标 / Info.plist / Playwright driver）
         shell: bash
         run: |
           set -e
           APP="dist/XYXBot.app"
           BIN="$APP/Contents/MacOS/XYXBot"
-          test -d "$APP"      || { echo "✗ 没有 $APP"; exit 1; }
-          test -x "$BIN"      || { echo "✗ $BIN 不可执行"; exit 1; }
-          echo "--- file ---";        file "$BIN"
-          echo "--- 架构 ---";        lipo -archs "$BIN" || true
-          echo "--- 体积 ---";        du -sh "$APP"
-          echo "--- 关键内容 ---"
-          ls "$APP/Contents/MacOS" | head -20
-          # Playwright 的 driver 必须在包里，否则浏览器起不来
-          if find "$APP" -name "node" -o -name "playwright.sh" | head -1 | grep -q .; then
-            echo "✓ 找到 Playwright driver"
-          else
-            echo "✗ 包里没有 Playwright driver"; exit 1
-          fi
-          # 我们自己的包
-          for p in src ui; do
-            find "$APP" -name "$p" -type d | head -1 | grep -q . \
-              || { echo "✗ 包里缺少 $p"; exit 1; }
-          done
-          echo "✓ 包内容检查通过"
+          test -d "$APP" || { echo "✗ 没有产出 $APP"; exit 1; }
+          test -x "$BIN" || { echo "✗ $BIN 不可执行"; exit 1; }
+          echo "--- file ---"; file "$BIN"
+          echo "--- 架构 ---"; lipo -archs "$BIN" || true
+          echo "--- 体积 ---"; du -sh "$APP"
+
+          # ① Info.plist 里的中文显示名（验证 info_plist 真的写进去了）
+          PLIST="$APP/Contents/Info.plist"
+          test -f "$PLIST" || { echo "✗ 没有 Info.plist"; exit 1; }
+          NAME="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$PLIST" 2>/dev/null || true)"
+          test "$NAME" = "星月创作台" || { echo "✗ Info.plist 显示名是 '$NAME'"; exit 1; }
+          echo "✓ Info.plist 显示名 = $NAME"
+
+          # ② 应用图标
+          ICNS="$(find "$APP" -name '*.icns' -print -quit)"
+          test -n "$ICNS" || { echo "✗ 包里没有 .icns 图标"; exit 1; }
+          echo "✓ 图标: $ICNS  ($(du -h "$ICNS" | cut -f1))"
+
+          # ③ Playwright driver（没有它连浏览器都起不来）
+          #    ★ 注意别去找 src/ ui/ 目录 —— PyInstaller 把纯 Python 模块
+          #      打进了 PYZ 归档，磁盘上**没有**这两个目录。
+          #      "我们的模块在不在包里"由下一步的 --selftest 实测（它 import 了）。
+          DRV="$(find "$APP" \( -name node -o -name 'playwright.sh' \) -print -quit)"
+          test -n "$DRV" || { echo "✗ 包里没有 Playwright driver"; exit 1; }
+          echo "✓ Playwright driver: $DRV"
+          echo "✓ 包结构检查通过"
 
       - name: 冒烟：跑包内自检（不创建窗口，所以 runner 上也能跑）
         shell: bash
         run: |
           set -e
-          ./dist/XYXBot.app/Contents/MacOS/XYXBot --selftest
+          BIN="dist/XYXBot.app/Contents/MacOS/XYXBot"
+          set +e
+          OUT="$("$BIN" --selftest 2>&1)"
+          RC=$?
+          set -e
+          echo "$OUT"
+          test $RC -eq 0 || { echo "✗ 自检退出码 $RC"; exit 1; }
+          # 自检能跑到这里，本身就证明我们的模块（src/ui）确实在包里 ——
+          # 它 import 了 src.config / src.selftest / src.session / browser_detector。
+          for kw in "核心依赖齐全" "数据可写" "Playwright"; do
+            echo "$OUT" | grep -q "$kw" || { echo "✗ 自检输出里缺少「$kw」"; exit 1; }
+          done
+          echo "✓ 包内自检通过"
 
       - name: 压缩（ditto 保留权限与符号链接）
         shell: bash
