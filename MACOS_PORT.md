@@ -27,36 +27,104 @@
 
 ---
 
-## 二、你需要做的一步：把代码推上 GitHub
+## 二、GitHub 仓库与授权：**已完成**
 
-这台机器上**没有 git**。请先装 git，然后：
+这台机器上没装 git，但我发现你的 `.gitconfig` 里指着一个 **PortableGit**
+（`~/.workbuddy/binaries/PortableGit/...`，git 2.55.0），里面还带
+**Git Credential Manager**。
 
-```bash
-# 1) 装 git（macOS 自带；Windows 用 https://git-scm.com/download/win）
-git --version
+检查后发现：**你的 GitHub 凭据本来就已经存在**（登录名 `zxl1835444162`，
+令牌权限 `gist, repo, workflow`）—— 所以**不需要再弹授权窗口**，直接就能推。
 
-# 2) 在项目目录初始化仓库
-cd <本项目目录>
-git init -b main
-git add .
-git commit -m "星月创作台：Windows 版 + macOS 移植 + CI 打包"
+已经做完的事：
 
-# 3) 在 GitHub 上建一个空仓库（不要勾选 README/gitignore），然后：
-git remote add origin https://github.com/<你的账号>/<仓库名>.git
-git push -u origin main
+| 步骤 | 结果 |
+|---|---|
+| `git init -b main` | ✓ 仓库级 user.name/email（**没改你的全局配置**） |
+| 提交 | ✓ `121a6f2` … 后续还有修复提交，共 94 个文件 / 5.06 MB |
+| 敏感文件检查 | ✓ **没有** `artifacts/`（含明文登录票据）被提交 |
+| 建仓库 | ✓ https://github.com/zxl1835444162/xyx-bot （**private**） |
+| 推送 | ✓ `main` 分支已推上去 |
+| 工作流 | ✓ 两个都已注册、状态 `active` |
+| Actions | ✓ `tests` 已在跑；`build-macos` 手动触发 |
+
+### 仓库为什么建成 private
+
+代码是私有的更稳妥。**代价是 macOS 构建额度有限**：
+
+* GitHub 免费账户每月 2000 分钟；**macOS runner 按 10 倍计费**
+* 本项目两个架构并行 ≈ 每个 8 分钟 → 一次构建计费约 **160 分钟**
+* 所以 private 大约能跑 **每月 12 次**
+
+如果你希望**不限次数免费**，在仓库 Settings → General → 最下面
+"Change repository visibility" 改成 **public** 就行（一处点击，随时可改回）。
+你现有的 `novel-publisher-mac` 就是 public，所以这大概也符合你的习惯。
+
+---
+
+## 二点五、应用图标
+
+你的图标已经接进去了：
+
+| 文件 | 用途 |
+|---|---|
+| `packaging/icons/source-icon.png` | 你给的原始 2048×2048（**原样保留**） |
+| `packaging/icons/icon.icns` | macOS 应用图标（10 个尺寸，含 Retina） |
+| `packaging/icons/icon.ico` | Windows 图标（16/24/32/48/64/128/256） |
+| `packaging/icons/icon-1024.png` | 参考 / Linux 用 |
+| `packaging/icons/icon-256.png` | 同上 |
+
+生成脚本：`python scripts/make_icons.py`（可重跑，参数都在文件顶部）
+
+### 我对源图做了两处处理，都不是"美化"，是必要的
+
+1. **去掉了右下角的「即梦AI」水印。**
+   把别人工具的 logo 打进自己的应用图标不合适，而且小尺寸下它就是一坨模糊亮斑。
+   做法：那块背景是近乎纯色的深蓝（标准差 <3），所以直接用**同一行左侧 470px
+   处的真实背景像素**覆盖（保留渐变与噪点），边界 6px 羽化。
+   想保留水印就设环境变量 `XYX_KEEP_WATERMARK=1` 重新生成。
+
+2. **套了 macOS 的圆角外形。**
+   源图是满幅正方形，直接放进去会是"一个方块夹在一堆圆角图标中间"。
+   做法：缩到 880×880，套一个**超椭圆**遮罩（`|x|^n+|y|^n=1`，n=5，接近
+   Apple 的连续圆角），居中贴到 1024×1024 透明画布。
+   实测你的作品只占 16.6%~78% 的范围，所以 72px 的边距**不会切到任何图形**。
+   Windows 的 `.ico` 保持满幅方形（Windows 习惯如此）。
+
+> 想看效果：`packaging/icons/icon-1024.png`。
+> 我这边已经用 Pillow 打开核对过：四角透明、中间不透明、水印框里没有亮像素。
+
+---
+
+## 二点六、一个 GitHub Actions 的坑（已踩并修好）
+
+第一版工作流是这么写的：
+
+```yaml
+on:
+  push:
+    tags: ["v*"]          # ← 和下面的 paths 是「与」关系！
+    paths: ["packaging/**"]
 ```
 
-推上去之后：
+GitHub 的过滤条件是**与**：于是变成"既要是 `v*` 标签、又要改动这些文件"，
+**普通分支推送永远不会触发**。实测现象就是：`tests` 一直在跑，
+`build-macos` 一次都没触发。
 
-* **Actions → tests** 会自动跑（Windows / macOS / Ubuntu 三平台）。
-* **Actions → build-macos → Run workflow** 手动点一次，几分钟后就能在
-  该次运行的 Artifacts 里下载 `XYXBot-macos-arm64.zip` 和
-  `XYXBot-macos-x86_64.zip`。
-* 以后打 `v1.0.0` 这样的标签 push，两个包会自动挂到 Release 上。
+已改成：
 
-> ⚠️ **`.gitignore` 已经挡掉了 `artifacts/`** —— 里面有明文登录票据
-> （`state.json`）。推之前可以 `git status` 扫一眼，确认没有
-> `artifacts/storage/` 被提交进去。
+```yaml
+on:
+  workflow_dispatch:            # 手动触发（平时拿包用这个）
+  push:
+    branches: ["main"]
+    paths: ["packaging/**", "scripts/build_macos.sh", ".github/workflows/build-macos.yml"]
+  release:
+    types: [published]          # 发布 Release 时自动挂包
+```
+
+并且把这条坑写进了 `tests/test_portability.py` 的回归检查
+（用真实 YAML 解析器判断 `push` 下有没有同时写 `tags` 和 `paths`）。
 
 ---
 
@@ -65,12 +133,11 @@ git push -u origin main
 ### 1) 在 macOS 上从源码跑（改代码时用）
 
 ```bash
-bash scripts/run_macos.sh          # 图形界面
+bash scripts/run_macos.sh            # 图形界面
 bash scripts/run_macos.sh cli books  # 命令行模式
 ```
 
 前提：装 **python.org 官方版 Python**（自带 tkinter）或 `brew install python-tk`。
-脚本会自己检查 tkinter，缺了会明确告诉你。
 
 ### 2) 在 macOS 上本地打包
 
@@ -81,19 +148,22 @@ bash scripts/build_macos.sh
 
 ### 3) 用 GitHub Actions 打包（推荐，不占你本机）
 
-见第二节。产物在每个 run 页面的 **Artifacts** 区。
+到 https://github.com/zxl1835444162/xyx-bot/actions ：
+选 **build-macos** → **Run workflow** → 等几分钟 →
+在该次运行的页面底部 **Artifacts** 下载
+`XYXBot-macos-arm64.zip`（Apple Silicon）或 `XYXBot-macos-x86_64.zip`（Intel）。
 
 ### 未签名的 .app，第一次打开会被 Gatekeeper 拦
 
-这是 macOS 的正常行为（任何没买 Apple 开发者账号签名的应用都这样）。两种办法：
+这是 macOS 的正常行为（没买 Apple 开发者账号签名的应用都这样）：
 
 ```
 ① Finder 里【右键 → 打开】→ 弹窗里再点【打开】（只需一次）
 ② 或者：xattr -cr /path/to/XYXBot.app
 ```
 
-想彻底免掉这个提示，需要 Apple 开发者账号（$99/年）做**签名 + 公证**。
-工作流里已经留了位置（`codesign_identity`），要接的时候告诉我。
+彻底免掉需要 Apple 开发者账号（$99/年）做**签名 + 公证**。
+工作流里留了 `codesign_identity` 的位置，要接的时候告诉我。
 
 ---
 

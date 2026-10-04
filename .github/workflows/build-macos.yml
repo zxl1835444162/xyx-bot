@@ -4,8 +4,8 @@ name: build-macos
 #
 # 触发方式：
 #   * 手动（Actions 页面点 Run workflow）—— 平时想拿个包就这么用
-#   * push 标签 v*        —— 顺便挂到 GitHub Release 上
-#   * 改动打包相关文件时自动跑一次，确认没打坏
+#   * 发布 Release（published） —— 自动把两个包挂到那个 Release 上
+#   * 改动 packaging/** 或 scripts/build_macos.sh 时自动跑一次，确认没打坏
 #
 # ★ 关于 runner 标签（2026-10 现状）
 #   * macos-13        已退役（2025-12）
@@ -19,15 +19,18 @@ name: build-macos
 
 on:
   workflow_dispatch:
+  # ★★ 千万别把 `tags:` 和 `paths:` 写在同一个 push 下面！
+  #   GitHub 的过滤条件是**与**关系：那样就变成"既要是 v* 标签、
+  #   又要改动 packaging/**"，于是**普通分支推送永远不会触发**（实测踩过）。
+  #   所以拆开：分支用 paths 过滤，发布用 release 事件。
   push:
-    tags: ["v*"]
+    branches: ["main"]
     paths:
       - "packaging/**"
+      - "scripts/build_macos.sh"
       - ".github/workflows/build-macos.yml"
-  pull_request:
-    paths:
-      - "packaging/**"
-      - ".github/workflows/build-macos.yml"
+  release:
+    types: [published]
 
 permissions:
   contents: write          # 打标签时需要创建 Release
@@ -121,14 +124,12 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: 打标签时挂到 Release
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: 发布时挂到 Release
+        if: github.event_name == 'release'
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -e
           TAG="${GITHUB_REF_NAME}"
-          gh release view "$TAG" >/dev/null 2>&1 || \
-            gh release create "$TAG" --title "$TAG" --notes "自动构建于 $GITHUB_SHA"
           gh release upload "$TAG" "dist/XYXBot-macos-${{ matrix.arch }}.zip" --clobber

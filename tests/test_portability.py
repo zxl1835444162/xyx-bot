@@ -440,6 +440,25 @@ try:
         except Exception as e:
             check_true(f"{name} YAML 解析通过", False, f"{type(e).__name__}: {e}")
     print("         （pyyaml 可用 → 做了真实解析）")
+
+    # ★★ 一个很容易踩的 GitHub Actions 坑：
+    #   同一个 push 事件下**同时**写 `tags:` 和 `paths:` —— 过滤条件是**与**关系，
+    #   于是"既要是 v* 标签、又要改动那些文件"，**普通分支推送永远不会触发**。
+    #   （实测踩过：build-macos 一直不跑，只有 tests 在跑。）
+    for name, txt in wf_texts.items():
+        try:
+            d = yaml.safe_load(txt) or {}
+        except Exception:
+            continue
+        on = d.get("on", d.get(True))       # YAML 1.1 把裸 on 解析成 True
+        if not isinstance(on, dict):
+            continue
+        push = on.get("push")
+        if isinstance(push, dict):
+            both = ("tags" in push) and ("paths" in push)
+            check_true(f"{name}: push 下没有同时写 tags+paths（会互相与）",
+                       not both,
+                       "tags 与 paths 同时存在 → 分支推送不会触发这个工作流")
 except ImportError:
     for name, txt in wf_texts.items():
         check_true(f"{name} 有 jobs: 与 runs-on:", "jobs:" in txt
