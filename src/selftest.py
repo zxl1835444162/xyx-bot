@@ -164,6 +164,28 @@ def collect_facts() -> dict:
         f["browser_detail"] = f"检测失败：{type(e).__name__}: {e}"
         f["warnings"].append("浏览器检测失败")
 
+    # ---- 字体：中文 Mac 上最容易出问题、也最难远程排查的一项 ----
+    try:
+        from ui.theme import font_report
+
+        f["font"] = font_report()
+        fr = f["font"]
+        m = fr.get("ui_matched")
+        state = ("命中候选" if m else
+                 ("候选未命中，用了回退" if m is False else "未定稿"))
+        f["font_detail"] = (
+            f"{fr.get('ui')}（{state}）"
+            + f" · 系统 {fr.get('system_family_count')} 个字体族"
+            f" · 枚举 {fr.get('families_ms')} ms"
+            + f" · 等宽 {fr.get('mono')}")
+        if m is False:
+            f["warnings"].append(
+                f"界面字体没匹配上候选（实际用 {fr.get('ui')}）—— "
+                "中文显示可能不正常，可用 XYX_UI_FONT 指定")
+    except Exception as e:
+        f["font"] = {}
+        f["font_detail"] = f"读取失败：{type(e).__name__}: {e}"
+
     # ---- 登录态（只是信息）----
     try:
         from src import session as S
@@ -465,6 +487,7 @@ def run_selftest(verbose: bool = True, smoke_ui: bool = False,
                     "" if f["playwright_ok"] else "✗"))
         print(_line("浏览器内核", f["browser_detail"],
                     "" if f["browser_path"] else "（仅警告）"))
+        print(_line("界面字体", f.get("font_detail", "?")))
         print(_line("登录态", f["session_detail"]))
 
     # ---- 界面能不能真的构造起来 ----
