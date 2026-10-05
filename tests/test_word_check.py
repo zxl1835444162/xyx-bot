@@ -609,6 +609,44 @@ check_true("ai_batch_chapters 默认下限也是 2100",
 check_true("ai_batch_chapters 默认 max_retry 也是 5",
            "max_retry: int = 5" in ai_src)
 
+# ============================================ 10. 「点不到开始 AI 续写」（2026-10-05 第3次报障）
+print("\n=== 10. 点不到「开始 AI 续写」：判据必须逐个探测可见元素 ===")
+# 用户实测：第 46 章成功、第 47 章失败「点不到『开始 AI 续写』按钮（14秒）」。
+# 根因：_visible() 只看 .first，多章残留/隐藏过渡层让 .first 命中不可见元素
+# ⇒ 判「找不到目标」直接 return False，三级降级一步没走。
+# 而同一页面上 _has_start_button()（逐个探测）说"有按钮" —— 自相矛盾。
+_vis_src = ai_src.split("def _visible(")[1].split("def _present(")[0]
+# ★ 只检查**真实代码**：剥掉注释行 + 文档字符串（三引号内的说明文字）。
+#   否则注释里解释历史的 "`.first` 会命中隐藏元素" 会误判为"代码里还在用"。
+import ast as _ast
+_ai_mod = _ast.parse(ai_src)
+_vis_fn = next(
+    (n for n in _ai_mod.body
+     if isinstance(n, _ast.FunctionDef) and n.name == "_visible"), None)
+assert _vis_fn is not None, "没找到 _visible 函数"
+if (_vis_fn.body and isinstance(_vis_fn.body[0], _ast.Expr)
+        and isinstance(_vis_fn.body[0].value, _ast.Constant)):
+    _vis_fn.body = _vis_fn.body[1:]          # 去掉 docstring
+_vis_code = _ast.unparse(_vis_fn)
+check_true("_visible 代码里不再用 .first（它会命中隐藏元素）",
+           ".first" not in _vis_code,
+           "只看 .first 会命中隐藏元素")
+check_true("_visible 逐个探测（对 count 做遍历）", "min(n, max_probe)" in _vis_src)
+check_true("_visible 第 1 轮无超时快探（隐藏元素不白等 timeout）",
+           "第 1 轮" in _vis_src and "第 2 轮" in _vis_src)
+check_true("_visible 第 1 轮用无超时 is_visible()", "loc.nth(i).is_visible()" in _vis_src)
+check_true("_visible 第 2 轮才用带 timeout 的 is_visible",
+           "loc.nth(i).is_visible(timeout=timeout)" in _vis_src)
+check_true("存在 _present()（找『存在但不一定可见』的元素）", "def _present(" in ai_src)
+check_true("_click_first 有第四档降级（存在即 JS 直点）",
+           "元素存在但判定不可见 → JS 直点兜底" in ai_src)
+check_true("第四档用的是 _present", "_present(page, selectors)" in ai_src)
+check_true("失败信息区分『无可见也无存在』",
+           "既无可见、也无存在的匹配元素" in ai_src)
+# 判据一致性：_has_start_button 与 _visible 都必须"逐个探测"
+check_true("_has_start_button 也是逐个探测（两处判据已统一）",
+           "for i in range(min(n, 4))" in ai_src)
+
 # ============================================ 汇总
 print("\n" + "=" * 60)
 print(f"  通过 {len(PASS)} 项，失败 {len(FAIL)} 项")

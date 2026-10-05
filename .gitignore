@@ -38,6 +38,9 @@ packaging/icons/icon-clean.png
 # 调试时从 GitHub 拉下来的 job 日志（别提交）
 _log_*.txt
 
+# 临时探针脚本（真机调试用，一次性，不入库）
+probes/
+
 # 编辑器
 .idea/
 .vscode/

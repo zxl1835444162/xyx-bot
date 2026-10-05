@@ -370,13 +370,69 @@ def _shot(page: Page, name: str) -> None:
         print(f"[shot] 失败: {e}")
 
 
-def _visible(page: Page, selectors, timeout: int = 1200):
-    """返回第一个可见的 Locator，找不到返回 None。"""
+def _visible(page: Page, selectors, timeout: int = 1200,
+             max_probe: int = 6):
+    """返回第一个**可见的** Locator，找不到返回 None。
+
+    ★★ 2026-10-05 修「点不到『开始 AI 续写』按钮」（用户实测第 47 章失败）：
+
+      老实现是 `page.locator(sel).first` + `is_visible()` —— **只看第一个**。
+      但页面上同时存在**多个**同名按钮（多章残留、隐藏的旧弹窗、
+      Naive UI 的隐藏过渡层），`.first` 极可能命中一个 **display:none /
+      0x0 的隐藏元素** ⇒ `is_visible()` = False ⇒ 立刻 `return None, None`
+      ⇒ `_click_first` 打印「✗ 找不到目标」并**直接返回 False**，
+      **三级降级（原生→JS→兜底）一步都没走到**。
+
+      ⇒ 于是出现这个自相矛盾的现象：
+         `_has_start_button()`（遍历最多 4 个、逐个判可见）说 **有按钮** ✅，
+         紧接着 `start_generate()`（只看 .first）说 **找不到按钮** ✗。
+
+      ⇒ 修法：与 `_has_start_button` 的判据统一 —— **逐个探测**，
+         返回第一个真正可见的那个。
+
+    ★ 性能：`is_visible(timeout=ms)` 对已存在但隐藏的元素会**等满 timeout**。
+      所以分两轮：
+        第 1 轮 `is_visible()`（无超时，立刻返回）—— 快，能命中绝大多数；
+        第 2 轮只在第 1 轮全灭时才用，且给 `timeout`（等它渲染出来）。
+      这样「本来就可见」的调用**一点没变慢**。
+    """
     for sel in selectors:
         try:
-            loc = page.locator(sel).first
-            if loc.is_visible(timeout=timeout):
-                return loc, sel
+            loc = page.locator(sel)
+            n = loc.count()
+            if n <= 0:
+                continue
+            # 第 1 轮：无超时快探（对隐藏元素立刻返回 False，不白等）
+            for i in range(min(n, max_probe)):
+                try:
+                    if loc.nth(i).is_visible():
+                        return loc.nth(i), sel
+                except Exception:
+                    continue
+            # 第 2 轮：等它变可见（可能还在渲染/过渡动画中）
+            if timeout and timeout > 0:
+                for i in range(min(n, max_probe)):
+                    try:
+                        if loc.nth(i).is_visible(timeout=timeout):
+                            return loc.nth(i), sel
+                    except Exception:
+                        continue
+        except Exception:
+            continue
+    return None, None
+
+
+def _present(page: Page, selectors, max_probe: int = 6):
+    """返回第一个**存在**（不一定可见）的 Locator，找不到返回 None。
+
+    ★ 2026-10-05 新增，配合 `_click_first` 的第四档降级：
+      「元素在 DOM 里但被判定不可见」时，仍可以用 JS 点击救回来。
+    """
+    for sel in selectors:
+        try:
+            loc = page.locator(sel)
+            if loc.count() > 0:
+                return loc.first, sel
         except Exception:
             continue
     return None, None
@@ -502,12 +558,34 @@ def _click_first(page: Page, selectors, label: str = "",
                  timeout: int = 1200, shot_on_fail: bool = False) -> bool:
     """点第一个可见的。失败返回 False。
 
-    ★ 三档降级：原生点击(900ms) → JS 点击(~6ms) → 原生点击(4000ms 兜底)。
+    ★ 三档降级：原生点击(600ms) → JS 点击(~6ms) → 原生点击(4000ms 兜底)。
       详见上面 CLICK_FAST_TIMEOUT 的说明。
+
+    ★★ 2026-10-05 加固（用户实测第 47 章「点不到『开始 AI 续写』按钮」）：
+      上面「三档降级」全都建立在**已经拿到可见 locator** 的前提上。
+      可一旦元素存在但**没被判定为可见**，老代码打印「✗ 找不到目标」
+      就直接 return False —— 三级降级一步没走，用户看到的就是
+      「点不到『开始 AI 续写』按钮」（而实际上按钮可能只是被遮挡/在过渡中）。
+
+      ⇒ 新增**第四档**：拿不到"可见"的元素时，退而求其次找**存在**的元素，
+        用 JS 点击（JS 不走命中测试，也不需要可见性）。
+        这对「按钮已渲染但被判定不可见」是决定性的救命路径。
     """
     loc, sel = _visible(page, selectors, timeout)
     if loc is None:
-        print(f"[ai] ✗ 找不到目标: {label or selectors[0]}")
+        # ★ 第四档：找不到"可见的" → 找"存在的"，用 JS 直接点
+        loc2, sel2 = _present(page, selectors)
+        if loc2 is not None:
+            try:
+                loc2.evaluate("el => el.click()")
+                print(f"[ai] ✓ 点击 {label or sel2}"
+                      f"（元素存在但判定不可见 → JS 直点兜底）")
+                return True
+            except Exception as e:
+                print(f"[ai] ✗ 存在但点不动({label or sel2}): "
+                      f"{str(e).splitlines()[0][:60]}")
+        print(f"[ai] ✗ 找不到目标: {label or selectors[0]}"
+              f"（既无可见、也无存在的匹配元素）")
         if shot_on_fail:
             _shot(page, f"fail-{(label or 'x').replace(' ', '_')}")
         return False
