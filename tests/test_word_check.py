@@ -454,23 +454,54 @@ check("长短差很大 → 不是同一段",
       _same_body(_LONG_A, _LONG_A + "新增内容" * 40), False)
 
 # ============================================ 7b. 弹窗洁净度（下一章必报错的根因）
-print("\n=== 7b. 续写弹窗洁净度校验（防上一轮结果页残留）===")
+print("\n=== 7b. 续写弹窗必须有「开始 AI 续写」按钮 ===")
 
-# ★ 用户报：「生成某一章没事，下一章一点『AI续写正文』就出错，
-#           提到『字数』『已满足』之类」「停留在续写界面」。
-#   机理：打开的弹窗其实是**上一轮结果页** ⇒ start_generate 没点中
-#   ⇒ wait_generation 第一次轮询就判"已完成" ⇒ 读旧字数（正好在 2100~2300）
-#   ⇒ 打印"在区间内 → 采纳使用" ⇒ 但页面上没有可点的按钮 ⇒ 失败。
-#   （"还没生成就有字数限制" 完全对上。）
-check_true("ai_continue 打开弹窗后校验洁净度",
-           "弹窗洁净度校验" in ai_src)
-check_true("不是初始态会关掉重开",
-           "判定为上一轮残留，关掉重开" in ai_src)
-check_true("重开仍残留则终止（不带病往下走）",
-           "续写弹窗仍停在上一轮的结果页" in ai_src)
+# ★★★ 根因来自**用户实测日志**（run-20261005-003748.log 第2章）：
+#     [ai] ✓ 弹窗已出现: .n-modal:has-text('续写正文')
+#     [ai] ✓ 续写弹窗为初始态（干净的新弹窗）
+#     [ai] --- 开始 AI 续写 ---
+#     [ai] ✗ 找不到目标: 开始 AI 续写        ← 真正的失败点
+#     [batch] ✗ 第2章失败（16s）（2028 字达标，已采纳）  ← reason 也是错的
+#
+#   ⇒ 两个问题叠加：
+#     ① 打开的"续写弹窗"里**没有开始按钮**（残页/假弹窗）。
+#        早期只查"是否完成态/是否生成中"，这种残页两样都不是 ⇒ 被放行。
+#        → 现在判据升级为「**必须看得见「开始 AI 续写」按钮**」。
+#     ② 失败 reason 显示成上一章的「2028 字达标，已采纳」——
+#        因为 LAST_DECISION 是**全局变量**，第2章早期失败时还留着第1章的值。
+#        → 现在 ai_continue 入口先清 LAST_DECISION，失败时也写它。
+check_true("存在 _has_start_button（权威可用性判据）",
+           "def _has_start_button" in ai_src)
+check_true("存在 _fake_continue_dialog_present（假弹窗识别）",
+           "def _fake_continue_dialog_present" in ai_src)
+check_true("存在 _close_any_continue_dialog（关假弹窗）",
+           "def _close_any_continue_dialog" in ai_src)
+check_true("open_continue_dialog 判据要求有开始按钮",
+           "未见「开始 AI 续写」按钮（疑似残页）" in ai_src)
+check_true("ai_continue 洁净度校验基于开始按钮",
+           "没有「开始 AI 续写」按钮" in ai_src)
+check_true("校验失败会关掉重开",
+           "判定为残页/假弹窗，关掉重开" in ai_src)
+check_true("重开仍无按钮则终止（不带病往下走）",
+           "重开后仍找不到「开始 AI 续写」按钮" in ai_src)
+check_true("ai_continue 入口清掉上一轮 LAST_DECISION",
+           "先把上一轮的决策清掉" in ai_src)
+check_true("失败分支也会写 LAST_DECISION（不再残留上一章值）",
+           "续写弹窗里没有「开始 AI 续写」按钮（残页）" in ai_src)
+check_true("失败 reason 禁止出现'达标/已采纳'语气",
+           "未产生本轮结果" in ai_src)
+check_true("批量跑章失败时不再回退到 gen.reason",
+           "只在**成功**时才允许回退到 gen.reason" in ai_src)
+check_true("ai_auto_chapter 进续写前主动清理残留",
+           "主动清理" in ai_src)
+check_true("存在章末统一清理 _cleanup_tail",
+           "def _cleanup_tail" in ai_src)
+_cleanup_calls = ai_src.count("_cleanup_tail()")
+check_true(f"章末清理在每个出口都调用（>=5 处，实测 {_cleanup_calls}）",
+           _cleanup_calls >= 5,
+           "失败出口尤其要清，否则弹窗异常态会传染到下一章")
 check_true("残留检测遍历所有 modal（不再只看 first）",
-           "遍历所有可见 modal" in ai_src
-           or "任一 modal 里同时有" in ai_src)
+           "遍历所有 modal" in ai_src and "遍历所有可见 modal" in ai_src)
 
 # ============================================ 8. 审稿前必须确认"是哪一章"
 print("\n=== 8. 审稿前核对章号（用户问「你知道是哪一章吗？」）===")

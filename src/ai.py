@@ -730,6 +730,81 @@ def _close_stale_result(page: Page) -> bool:
     return closed
 
 
+def _has_start_button(page: Page) -> bool:
+    """当前页面上是否**可见**「开始 AI 续写」按钮（续写弹窗可用的权威标志）。
+
+    ★ 2026-10-05 新增。用户实测日志里第2章就是栽在这：
+      弹窗"出现了"（含「续写正文」字样），但里面**没有**这个按钮
+      ⇒ `start_generate` 找不到目标 ⇒ 整章失败，而 reason 还被显示成
+        「2028 字达标，已采纳」（误导）。
+    """
+    for sel in AI_SELECTORS["btn_start"]:
+        try:
+            loc = page.locator(sel)
+            n = loc.count()
+            for i in range(min(n, 4)):
+                try:
+                    if loc.nth(i).is_visible():
+                        return True
+                except Exception:
+                    continue
+        except Exception:
+            continue
+    return False
+
+
+def _fake_continue_dialog_present(page: Page) -> bool:
+    """是否存在**假的**续写弹窗：有「续写正文」字样、但没有「开始 AI 续写」按钮。
+
+    这正是用户第2章失败时的状态。
+    """
+    if _has_start_button(page):
+        return False
+    try:
+        loc, _sel = _visible(page, AI_SELECTORS["dialog"], timeout=300)
+        return loc is not None
+    except Exception:
+        return False
+
+
+def _close_any_continue_dialog(page: Page) -> bool:
+    """关掉当前的续写弹窗（不论真假），容忍关不掉。
+
+    ★ 与 `_close_stale_result` 的区别：那个针对「完成态结果页」，
+      这个针对「任何续写弹窗」（含没有开始按钮的假弹窗）。
+    """
+    closed = False
+    for sel in ("button[aria-label='close']", ".n-base-close",
+                "button:has-text('取消')", "button:has-text('关闭')"):
+        try:
+            loc = page.locator(f".n-modal {sel}")
+            n = loc.count()
+            for i in range(min(n, 4)):
+                b = loc.nth(i)
+                try:
+                    if b.is_visible():
+                        b.click(timeout=2000)
+                        closed = True
+                        print(f"[ai]   ✓ 已点关闭({sel})")
+                        break
+                except Exception:
+                    continue
+            if closed:
+                break
+        except Exception:
+            continue
+    if not closed:
+        try:
+            page.keyboard.press("Escape")
+            closed = True
+            print("[ai]   ✓ 已按 ESC 关闭假弹窗")
+        except Exception:
+            pass
+    wait_gone(lambda: _fake_continue_dialog_present(page), timeout=2.5,
+              interval=0.1, desc="假续写弹窗关闭")
+    return closed
+
+
 def open_continue_dialog(page: Page, wait: float = 3.0) -> bool:
     """点顶部「AI续写正文」，等弹窗出现。
 
@@ -755,16 +830,34 @@ def open_continue_dialog(page: Page, wait: float = 3.0) -> bool:
     if _stale_result_present(page):
         _close_stale_result(page)
 
+    # ★★ 2026-10-05（用户实测日志定位）：若已有一个**假弹窗**（含"续写正文"
+    #   字样、但没有「开始 AI 续写」按钮），先关掉它，否则下面 `_dialog_shown`
+    #   会把它当成"弹窗已出现"，后面 start_generate 必然找不到按钮。
+    #   ★ 用户日志铁证（第2章）：
+    #       ✓ 弹窗已出现: .n-modal:has-text('续写正文')
+    #       ✓ 续写弹窗为初始态（干净的新弹窗）
+    #       ...
+    #       ✗ 找不到目标: 开始 AI 续写     ← 就是这个假弹窗害的
+    if _fake_continue_dialog_present(page):
+        print("[ai] ⚠ 发现一个不含「开始 AI 续写」的假弹窗（残页）→ 先关掉")
+        _close_any_continue_dialog(page)
+
     # 清干扰弹窗
     n = dismiss_dialogs(page, verbose=True)
     if n:
         print(f"[ai] 清掉了 {n} 个干扰弹窗")
 
     def _dialog_shown() -> bool:
+        # ★★ 判据升级（2026-10-05）：必须**真的能看到「开始 AI 续写」按钮**，
+        #   才算"可用的续写弹窗"。只凭 `:has-text('续写正文')` 会把残页收下。
         loc, sel = _visible(page, AI_SELECTORS["dialog"], timeout=2500)
-        if loc is not None:
-            print(f"[ai] ✓ 弹窗已出现: {sel}")
+        if loc is None:
+            return False
+        # 弹窗在 → 再确认里面有开始按钮
+        if _has_start_button(page):
+            print(f"[ai] ✓ 弹窗已出现且含「开始 AI 续写」: {sel}")
             return True
+        print(f"[ai] ⚠ 弹窗出现但未见「开始 AI 续写」按钮（疑似残页）: {sel}")
         return False
 
     _click_first(page, AI_SELECTORS["btn_continue"], label="AI续写正文")
@@ -3646,6 +3739,14 @@ def ai_continue(page: Page,
         best_effort:  ★ 重试耗尽仍未入区间时，是否采纳最后一轮（尽力而为）
     """
     global LAST_DECISION          # ★ 必须在函数体最前面声明
+    # ★★★ 2026-10-05（用户实测日志定位）：**先把上一轮的决策清掉**。
+    #   否则本轮若在早期就失败（如找不到「开始 AI 续写」），
+    #   `ai_auto_chapter` 拿到的 `LAST_DECISION` 还是**上一章的**，
+    #   于是失败原因被显示成上一章的「2028 字达标，已采纳」—— 完全误导。
+    #   用户日志铁证：
+    #     第1章 →「2028 字达标，已采纳」（正确）
+    #     第2章失败 →「2028 字达标，已采纳」（✗ 这是第1章的值！）
+    LAST_DECISION = None
     print("=" * 58)
     print("  AI 续写正文")
     print(f"    模型     = {model}")
@@ -3659,43 +3760,48 @@ def ai_continue(page: Page,
     print("=" * 58)
 
     if not open_continue_dialog(page, wait=wait_dialog):
+        LAST_DECISION = {"ok": False, "words": -1, "tries": [], "rounds": 0,
+                         "reason": "续写弹窗打不开"}
         return False
 
     # ⓪-0 ★★ 弹窗洁净度校验（2026-10-05 新增，定位用户报「下一章点续写就报错」）
-    #   用户原话：「生成某一章没事，下一章一点『AI续写正文』就出错，
-    #             提到『字数』『已满足』之类」+「停留在续写界面」。
+    #   用户原话：「生成某一章没事，下一章一点『AI续写正文』就出错」
+    #              + 「停留在续写界面」。
     #
-    #   机理：若打开后的弹窗其实是**上一轮的结果页**（带「重新生成」按钮），
-    #     那么 `start_generate` 点「开始 AI 续写」会点在旧页面上（或压根没有
-    #     这个按钮）→ `wait_generation` 第一次轮询就看到「重新生成」→
-    #     **立刻判"已完成"** → `get_gen_word_count` 读到**旧字数**（正是上一章
-    #     那个 2100~2300 的数）→ 打印「N 字在区间内 → 采纳使用」→
-    #     可页面上根本没有可点的「采纳使用」→ 「点『采纳使用』失败」。
-    #   表现就完全对上了：「还没生成就有字数限制」「停留在这个界面」。
+    #   ★★★ 用户实测日志（run-20261005-003748.log，第2章）给出的**真实根因**：
+    #     ```
+    #     [ai] ✓ 弹窗已出现: .n-modal:has-text('续写正文')
+    #     [ai] ✓ 续写弹窗为初始态（干净的新弹窗）
+    #     ...
+    #     [ai] ✗ 找不到目标: 开始 AI 续写       ← 失败点
+    #     ```
+    #     ⇒ 打开的弹窗**没有「开始 AI 续写」按钮**（是个残页/假弹窗）。
+    #       前几版校验只查"是否完成态/是否生成中"，这种残页**两样都不是**，
+    #       所以被判定为"初始态 ✅"放行 —— 校验不够严。
     #
-    #   加固：开完弹窗立刻确认是**初始态**（既没在生成、也没有完成态按钮）。
-    #     发现残留 → 关掉重开一次；仍残留则明确报错，不再带病往下走。
-    _fresh = (not gen_finished(page)) and (not gen_in_progress(page))
-    if not _fresh:
-        print("[ai] ⚠ 打开的续写弹窗不是初始态"
+    #   ⇒ 现在的权威判据：**必须真的看得见「开始 AI 续写」按钮**。
+    #     没有 → 关掉重开；重开仍没有 → 明确失败（绝不再带上"找不到按钮"往下走）。
+    if not _has_start_button(page):
+        print("[ai] ⚠ 打开的续写弹窗**没有「开始 AI 续写」按钮**"
               f"（完成态={gen_finished(page)} 生成中={gen_in_progress(page)}）"
-              "→ 判定为上一轮残留，关掉重开")
+              "→ 判定为残页/假弹窗，关掉重开")
         _close_stale_result(page)
-        try:
-            close_continue_dialog(page)
-        except Exception:
-            pass
+        _close_any_continue_dialog(page)
         if not open_continue_dialog(page, wait=wait_dialog):
             print("[ai] ✗ 重开续写弹窗失败")
+            LAST_DECISION = {"ok": False, "words": -1, "tries": [], "rounds": 0,
+                             "reason": "续写弹窗打不开（重开失败）"}
             return False
-        if gen_finished(page):
-            print("[ai] ✗ 续写弹窗仍停在上一轮的结果页"
-                  "（可能站点改版或关闭按钮失效）→ 终止，避免把旧字数当本轮结果")
-            _shot(page, "ai_continue_stale_dialog")
+        if not _has_start_button(page):
+            print("[ai] ✗ 重开后仍找不到「开始 AI 续写」按钮"
+                  "→ 终止（继续只会重复'找不到目标'）")
+            _shot(page, "ai_continue_no_start_btn")
+            LAST_DECISION = {"ok": False, "words": -1, "tries": [], "rounds": 0,
+                             "reason": "续写弹窗里没有「开始 AI 续写」按钮（残页）"}
             return False
-        print("[ai] ✓ 续写弹窗已刷新为初始态")
+        print("[ai] ✓ 续写弹窗已刷新，含「开始 AI 续写」按钮")
     else:
-        print("[ai] ✓ 续写弹窗为初始态（干净的新弹窗）")
+        print("[ai] ✓ 续写弹窗可用（含「开始 AI 续写」按钮）")
 
     # ⓪ ★ 选快捷选项（提示词）—— 必须在填剧情之前，
     #    因为换提示词可能会重置「续写要求」框里的内容
@@ -3736,6 +3842,8 @@ def ai_continue(page: Page,
     # ④ 开始
     ok = start_generate(page)
     if not ok:
+        LAST_DECISION = {"ok": False, "words": -1, "tries": [], "rounds": 0,
+                         "reason": "点不到「开始 AI 续写」按钮"}
         return False
     print("[ai] ✓ 已触发 AI 续写，等待生成 …")
 
@@ -4158,6 +4266,30 @@ def ai_auto_chapter(page: Page,
     result = {"gen": None, "body": -1, "review": False,
               "ok": False, "reason": ""}
 
+    def _cleanup_tail() -> None:
+        """★★ 章末统一清理（2026-10-05）：把续写相关弹窗清干净。
+
+        为什么要做成函数、并在**每个 return 前**都调：
+          · 用户实测日志显示：第1章结束后没清续写结果页 ⇒ 第2章一开就
+            「续写弹窗=True」但"没有开始按钮" ⇒ `找不到目标: 开始 AI 续写`
+            ⇒ 「本章没事、下一章必报错」。
+          · **失败时更要清**（失败往往正是弹窗卡在异常态），
+            否则错误会一路传染到后面每一章。
+        全程吞异常，绝不影响主流程返回。
+        """
+        try:
+            if _stale_result_present(page):
+                print("[auto] 收尾：清理续写结果页（防污染下一章）")
+                _close_stale_result(page)
+            if continue_dialog_open(page):
+                print("[auto] 收尾：关闭续写弹窗")
+                close_continue_dialog(page)
+            if _fake_continue_dialog_present(page):
+                print("[auto] 收尾：关闭残留的续写弹窗壳")
+                _close_any_continue_dialog(page)
+        except Exception as _e:
+            print(f"[auto] 收尾清理异常（忽略）：{_e}")
+
     # ================= 阶段零：流程准备（可选）=================
     #  ★ 用户需求（2026-10-03）：一条龙之前先做「打开网站 + 保存 cookie/缓存」。
     #    UI 里已经单独给了「① 打开网站并保存」按钮；这里提供程序化入口，
@@ -4220,14 +4352,32 @@ def ai_auto_chapter(page: Page,
         _diag_gen_fin = gen_finished(page)
         _diag_stale = _stale_result_present(page)
         _diag_dlg = continue_dialog_open(page)
+        _diag_start_btn = _has_start_button(page)
         _diag_wc = get_gen_word_count(page)
         print(f"[auto][diag] 进入续写前状态："
               f"结果页={_diag_gen_fin} 残留={_diag_stale} "
-              f"续写弹窗={_diag_dlg} 读到的字数={_diag_wc} "
+              f"续写弹窗={_diag_dlg} 开始按钮={_diag_start_btn} "
+              f"读到的字数={_diag_wc} "
               f"| 区间={min_words}~{max_words} 重试={max_retry}")
+
+        # ★★★ 主动清理（2026-10-05，用户实测日志定位）：
+        #   用户第2章日志：进入时「续写弹窗=True」但里面**没有开始按钮**
+        #   ⇒ 上一章残留物没清干净 ⇒ 后面 start_generate「找不到目标」。
+        #   这里在进续写之前**主动清一次**：
+        #     · 完成态结果页 → 关掉（_close_stale_result）
+        #     · 有续写弹窗字样但没有「开始 AI 续写」按钮 → 假弹窗，关掉
         if _diag_gen_fin or _diag_stale:
-            print("[auto][diag] ⚠ 进入时就有'完成态'元素 —— 疑似上一章残留！"
-                  "若随后出现'字数已满足'请把这几行发我")
+            print("[auto][diag] ⚠ 进入时就看到'完成态'结果页 → 主动关掉"
+                  "（这是上一章残留，留着会污染本轮判定）")
+            _close_stale_result(page)
+        if _diag_dlg and not _diag_start_btn:
+            print("[auto][diag] ⚠ 进入时有一个'续写弹窗'但**没有开始按钮**"
+                  "（假弹窗/残页）→ 主动关掉")
+            _close_any_continue_dialog(page)
+            if _fake_continue_dialog_present(page) or continue_dialog_open(page):
+                print("[auto][diag] ⚠ 关不干净 → 再补一次")
+                _close_stale_result(page)
+                _close_any_continue_dialog(page)
     except Exception as _e:
         print(f"[auto][diag] 状态诊断失败（忽略）：{_e}")
 
@@ -4243,7 +4393,15 @@ def ai_auto_chapter(page: Page,
     result["gen"] = dict(LAST_DECISION) if LAST_DECISION else {"ok": gen_ok}
     if not gen_ok:
         print("[auto] ✗ 续写阶段失败，终止")
-        result["reason"] = (result["gen"] or {}).get("reason") or "续写阶段失败"
+        # ★★ 2026-10-05：优先用本轮 gen.reason（ai_continue 现在保证失败时
+        #   也会写 LAST_DECISION）；再加一道保险：若 reason 看起来像
+        #   "N 字达标/已采纳"（那是**成功**的语气，不该出现在失败里），
+        #   说明拿到的是别处的残留值 → 换成明确的失败描述。
+        _gr = (result["gen"] or {}).get("reason") or ""
+        if ("达标" in _gr) or ("已采纳" in _gr):
+            _gr = "续写阶段失败（未产生本轮结果）"
+        result["reason"] = _gr or "续写阶段失败"
+        _cleanup_tail()          # ★ 失败更要清（弹窗多半正卡在异常态）
         return result
 
     # ================= 阶段二：衔接 =================
@@ -4274,6 +4432,7 @@ def ai_auto_chapter(page: Page,
     if new_len <= 0:
         print("[auto] ✗ 正文为空，无法审稿，终止")
         result["reason"] = "采纳后正文为空"
+        _cleanup_tail()          # ★ 失败更要清（弹窗多半正卡在异常态）
         return result
     if body_before >= 0 and new_len == body_before:
         print(f"[auto] ⚠ 正文长度没变（{new_len}），可能采纳没生效，仍继续审稿")
@@ -4284,6 +4443,7 @@ def ai_auto_chapter(page: Page,
         # ★ do_review=False 时「续写+采纳」就是全部工作，故 ok 由续写决定
         result["ok"] = bool((result["gen"] or {}).get("ok", True))
         result["reason"] = "仅续写（未审稿）"
+        _cleanup_tail()          # ★ 只续写时更要把续写弹窗清干净
         return result
 
     # ================= 阶段三：审稿 =================
@@ -4319,6 +4479,7 @@ def ai_auto_chapter(page: Page,
                           f"→ 终止，避免审错章")
                     result["reason"] = (f"审稿前章节错位：目标第{want_no}章，"
                                         f"实际第{back_no}章")
+                    _cleanup_tail()      # ★ 失败更要清（弹窗多半正卡在异常态）
                     return result
 
     rev_ok = ai_review(
@@ -4346,6 +4507,11 @@ def ai_auto_chapter(page: Page,
             close_review_pane(page)
         except Exception:
             pass
+
+    # ★★ 终局收尾（2026-10-05 新增，用户实测日志定位）：
+    #   一章结束后必须把**续写结果页/续写弹窗**也清干净，见 `_cleanup_tail`。
+    #   （无论本章成功还是失败都要清，才能保证"下一章必报错"不再出现。）
+    _cleanup_tail()
 
     print("\n" + "=" * 58)
     print("  ★ 一章自动流程结束")
@@ -4660,8 +4826,17 @@ def ai_batch_chapters(page: Page,
         ok = bool(r.get("ok", r.get("review", False)))
         # ★ 失败原因现在真的能拿到了（原来 r.get("reason") 恒为 None）
         reason = r.get("reason") or ""
-        if not reason and r.get("gen"):
+        # ★★ 2026-10-05 修正：只在**成功**时才允许回退到 gen.reason。
+        #   失败时若回退到 gen.reason，会把上一章的「2028 字达标，已采纳」
+        #   显示成本章失败原因（用户实测日志里就是这个误导）。
+        if not reason and ok and r.get("gen"):
             reason = (r["gen"] or {}).get("reason") or ""
+        # 失败但没拿到原因 → 给个明确的兜底，绝不显示"达标/已采纳"这种成功语气
+        if not ok and not reason:
+            _gr = ((r.get("gen") or {}).get("reason") or "")
+            reason = (_gr if ("失败" in _gr or "打不开" in _gr or "点不到" in _gr
+                              or "没有" in _gr or "超时" in _gr)
+                      else "续写/审稿阶段未成功（详见运行日志）")
         secs = time.time() - t_ch
         # ★★ 区分「真的失败」和「被用户停止」：
         #   章内的长等待（等生成/等审稿）收到停止请求时会立刻退出并返回失败，
