@@ -503,6 +503,53 @@ check_true(f"章末清理在每个出口都调用（>=5 处，实测 {_cleanup_c
 check_true("残留检测遍历所有 modal（不再只看 first）",
            "遍历所有 modal" in ai_src and "遍历所有可见 modal" in ai_src)
 
+# ============================================ 7c. 选提示词必须"真的选上"
+print("\n=== 7c. 选提示词要回读确认（用户报「根本没选上」）===")
+
+# ★★★ 用户原话（2026-10-05）：
+#   「在选择「强盛集团云霄」和「强盛集团云霄拯救过稿计划」这两个提示词的
+#     时候，点击后需要加一小点的延迟，不然有时候加载不出来，导致根本
+#     没选上，或者你加一个状态检测？到底选没选上？」
+#
+# ★ 本机逐帧探针坐实的真根因（_probe_pick2.py）：
+#     面板是**分批渲染**的：
+#       t=0.01s 行数= 0
+#       t=0.20s 行数=11     ← 第一批
+#       t=0.26s 行数=26     ← 第二批
+#     老 wait_shortcut_loaded 判据是「行数连续两次一致且 >0 就返回」
+#     ⇒ **0.2 秒就返回**。目标若在第 12~26 条里 ⇒ 返回时还没渲染
+#     ⇒ 后续 filter(has_text=关键字) 命中 0 ⇒ 判「面板里没有含 xx 的提示词」
+#     ⇒ **静默跳过、根本没选上**。这就是用户看到的现象。
+#
+# ★ 修复三件：
+#   ① wait_shortcut_loaded 加 keyword 参数：有明确目标时判据升级为
+#      「**目标那一行已渲染**」，并支持「列表渲染完仍无目标 → 提前退出」。
+#   ② 找不到目标时不再立刻放弃：补等 + 滚动列表，再找 2 轮。
+#   ③ 点击后**必须回读确认**；没对上 → 延迟后重试点击一次。
+#      续写读「续写要求」行、审稿读「审稿要求」行（verify_row 区分）。
+check_true("wait_shortcut_loaded 支持 keyword 参数（按目标等待，而非只看行数）",
+           "def wait_shortcut_loaded(page: Page, timeout: float = 20.0,\n                         poll: float = 0.1, keyword: str = \"\")" in ai_src)
+check_true("目标行渲染出来就算加载完成",
+           "目标提示词已渲染" in ai_src)
+check_true("列表渲染完仍无目标 → 提前退出（不白等满超时）",
+           "提前结束等待" in ai_src)
+check_true("pick_shortcut 调用时把 keyword 传给等待函数",
+           "wait_shortcut_loaded(page, timeout=8.0, keyword=keyword)" in ai_src)
+check_true("找不到目标时会补等+滚动列表重试（不再一次放弃）",
+           "补等并滚动列表" in ai_src)
+check_true("pick_shortcut 点击后回读确认（续写/审稿各读各自那一行）",
+           "def _read_back()" in ai_src and "current_review_requirement(page)" in ai_src)
+check_true("回读未命中 → 延迟后重试点击一次（用户要求的那「一小点延迟」）",
+           "延迟后重试点击一次" in ai_src and "time.sleep(0.6)" in ai_src)
+check_true("审稿场景也回读（老代码 verify_row=False 完全不回读）",
+           "审稿要求回读未命中，但点击已成功" in ai_src)
+check_true("重试前会重新打开面板（面板已收起的情况）",
+           "重试前重开面板失败" in ai_src)
+check_true("回读命中会打印「回读确认」",
+           "（回读确认）" in ai_src)
+check_true("旧的「跳过行回读」静默分支已删除",
+           "跳过行回读" not in ai_src)
+
 # ============================================ 8. 审稿前必须确认"是哪一章"
 print("\n=== 8. 审稿前核对章号（用户问「你知道是哪一章吗？」）===")
 

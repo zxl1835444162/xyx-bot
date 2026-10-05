@@ -1436,14 +1436,23 @@ def open_shortcut_panel(page: Page) -> bool:
 
 
 def wait_shortcut_loaded(page: Page, timeout: float = 20.0,
-                         poll: float = 0.1) -> int:
+                         poll: float = 0.1, keyword: str = "") -> int:
     """★ 等「快捷选项」面板把提示词列表加载出来。
 
-    ★ 实测坑（2026-10-03）：面板打开瞬间是**空的**，显示
-      「已收藏 0」「正在加载收藏提示词…」，
-      要等 2~6 秒才渲染出 28+ 条。
-      不等的话 `pick_shortcut` 会看到 0 项 → 直接判「没有含关键词的提示词」
-      → **明明有这个提示词却选不上**。
+    ★★ 2026-10-05 用户报障修复：「有时候加载不出来，导致根本没选上」。
+      用户实测 + 本机逐帧探针坐实：面板是**分批渲染**的，实测时序
+        t=0.01s 行数= 0
+        t=0.20s 行数=11     ← 第一批
+        t=0.26s 行数=26     ← 第二批
+      老判据是「行数连续两次一致且 >0 就返回」⇒ **0.2 秒就返回了**。
+      如果目标提示词恰好在**后面的批次**里（这里是第 12~26 条），
+      返回时它还没渲染 ⇒ `pick_shortcut` 的 filter 命中 0 条
+      ⇒ 判「面板里没有含 xx 的提示词」⇒ **静默跳过、根本没选上**。
+      这跟用户看到的「点击后没加载出来」，本质是同一件事。
+
+    ★ 修复：有明确 `keyword` 时，判据升级为「**目标那一行已经渲染出来**」——
+      这才是真正要等的东西；行数稳定只是副产品。
+      （`keyword` 为空时保留老的「行数稳定」判据，因为没有明确目标。）
 
     ★ 效率改造（本轮）：原实现是「数一次 → **固定 sleep 1.0s** → 再数一次」，
       也就是**每次调用至少吃掉 1 秒**，而且是 `poll=1.5` 的粗轮询。
@@ -1480,6 +1489,34 @@ def wait_shortcut_loaded(page: Page, timeout: float = 20.0,
     last = -1
     stable = 0
     while time.time() - t0 < timeout:
+        # ★★ 2026-10-05：有明确目标时，**目标行出现就算加载完成**（首选判据）
+        if keyword:
+            try:
+                if rows.filter(has_text=keyword).count() > 0:
+                    n = rows.count()
+                    print(f"[ai] ✓ 目标提示词已渲染（{n} 项，{time.time()-t0:.2f}s）")
+                    return n
+            except Exception:
+                pass
+            # ★ 提前退出（省时间）：行数已经**连续一段时间没变**，且这期间
+            #   目标始终不出现 ⇒ 列表已渲染完、这个关键词就是没有。
+            #   实测：真不存在时若死等 8s，白等；改为「稳定 1.5s 即退」。
+            try:
+                n = rows.count()
+            except Exception:
+                n = -1
+            if n != last:
+                last = n
+                stable = 0
+            else:
+                stable += 1
+            if n >= 0 and stable >= int(1.5 / max(poll, 0.01)):
+                print(f"[ai] ⚠ 列表已渲染完（{n} 项）但仍无「{keyword}」"
+                      f"→ 提前结束等待（{time.time()-t0:.2f}s）")
+                return n
+            time.sleep(poll)
+            continue
+
         try:
             n = rows.count()
         except Exception:
@@ -1495,6 +1532,14 @@ def wait_shortcut_loaded(page: Page, timeout: float = 20.0,
             print(f"[ai] ✓ 快捷选项加载完成（{n} 项）")
             return n
         time.sleep(poll)
+    # ★ 超时也要给出准确信息：是「一行没有」还是「有行但目标没出现」
+    if keyword:
+        try:
+            n = rows.count()
+        except Exception:
+            n = 0
+        print(f"[ai] ⚠ 等目标提示词超时（{timeout:.1f}s，面板现有 {n} 项）")
+        return n
     print(f"[ai] ⚠ 快捷选项加载超时（{last} 项）")
     return max(last, 0)
 
@@ -1555,7 +1600,21 @@ def pick_shortcut(page: Page, keyword: str = "", index: int = 0,
             return False
 
     # ★★ 必须等列表加载完（实测：打开瞬间是 0 项 + 「正在加载收藏提示词…」）
-    wait_shortcut_loaded(page)
+    #   ★★ 2026-10-05：把 keyword 传进去 —— 有明确目标时等的是
+    #      「**目标那一行**已渲染」，而不是「行数稳定」。
+    #      逐帧探针坐实：行数 0→11(稳定,0.2s)→26，老判据 0.2s 就返回，
+    #      目标若在第 12~26 条里就**根本没渲染出来**，后续 filter 命中 0 →
+    #      静默跳过（= 用户说的「根本没选上」）。
+    #   ★ 超时给 8s（不是默认 20s）：实测正常 0.2~0.6s 就绪；真没有这个
+    #     提示词时，等 8s 足够，不必白等 20s（下面还有补等+滚动兜底）。
+    n_loaded = wait_shortcut_loaded(page, timeout=8.0, keyword=keyword)
+
+    # ★ 补一次机会：面板可能被"点开了但内容还在请求"，或者首屏渲染恰好
+    #   卡在第一批。给一次针对性补等（只等目标行，超时很短），
+    #   避免直接掉进「找不到 → 跳过」。
+    if keyword and n_loaded == 0:
+        print("[ai] ⚠ 面板还没渲染出任何行 → 补等一次")
+        wait_shortcut_loaded(page, timeout=4.0, keyword=keyword)
 
     # ① 可选：先用搜索框缩小列表
     if search_first and keyword:
@@ -1588,21 +1647,19 @@ def pick_shortcut(page: Page, keyword: str = "", index: int = 0,
     target = None
     matched_by = ""
 
-    if keyword:
-        # 优先：整串关键词
+    def _find_target():
+        """按关键词找行；返回 (locator|None, 说明)。"""
+        if not keyword:
+            return None, ""
         m = rows.filter(has_text=keyword)
         n = m.count()
         if n:
             if index < n:
-                target = m.nth(index)
-                matched_by = f"has-text({keyword!r})"
-            else:
-                target = m.first
-                matched_by = f"has-text({keyword!r}) first"
-
+                return m.nth(index), f"has-text({keyword!r})"
+            return m.first, f"has-text({keyword!r}) first"
         # 兜底：把关键词切成 2 字片段逐个试（应对站点改字，如 云霄/云哥）
         # ★ 但只认「片段命中数唯一」的情况，避免选错
-        if target is None and len(keyword) >= 4:
+        if len(keyword) >= 4:
             cands = []
             for i in range(len(keyword) - 1):
                 frag = keyword[i:i + 2]
@@ -1613,20 +1670,47 @@ def pick_shortcut(page: Page, keyword: str = "", index: int = 0,
                 if c == 1:
                     cands.append((frag, mm.first))
             if len(cands) == 1:
-                target = cands[0][1]
-                matched_by = f"片段 {cands[0][0]!r}（唯一命中）"
-            elif len(cands) > 1:
-                # 多个片段各自唯一命中，取第一个但打日志提示
-                target = cands[0][1]
-                matched_by = (f"片段 {cands[0][0]!r}"
-                              f"（注意：{len(cands)} 个片段都能命中）")
+                return cands[0][1], f"片段 {cands[0][0]!r}（唯一命中）"
+            if len(cands) > 1:
+                return (cands[0][1],
+                        f"片段 {cands[0][0]!r}（注意：{len(cands)} 个片段都能命中）")
+        return None, ""
+
+    if keyword:
+        target, matched_by = _find_target()
+
+        # ★★★ 2026-10-05 用户报障修复：一次没找到**不要立刻放弃**。
+        #   面板行是**虚拟滚动**渲染的，目标可能还没进 DOM；
+        #   也可能首屏只渲染了第一批（逐帧实测 0→11→26）。
+        #   这里再给两轮「补等 + 滚动」的机会，然后才判「没有」。
+        for _retry in range(2):
+            if target is not None:
+                break
+            print(f"[ai] ⚠ 暂未找到含「{keyword}」的行 → 补等并滚动列表"
+                  f"（第 {_retry + 1}/2 次）")
+            wait_shortcut_loaded(page, timeout=2.0, keyword=keyword)
+            # 把面板列表滚到底（虚拟滚动会把后面的行渲染出来）
+            try:
+                page.evaluate("""() => {
+                  const m = document.querySelector('.shortcut-picker-modal');
+                  if (!m) return;
+                  const cands = m.querySelectorAll(
+                      '.n-scrollbar-container, .prompt-row, .n-virtual-list');
+                  for (const c of cands) {
+                    try { c.scrollTop = c.scrollHeight; } catch (e) {}
+                  }
+                }""")
+            except Exception:
+                pass
+            time.sleep(0.25)   # ★ 用户要求：「加一小点延迟」，等渲染
+            target, matched_by = _find_target()
 
     if target is None:
         # ★ 有关键词却没命中 → 不选错，但也**不阻断主流程**
         #   （用户要求：有则改、没有就跳过，不影响进程）
         if keyword:
             n = rows.count()
-            print(f"[ai] ⚠ 面板里没有含「{keyword}」的提示词（共 {n} 项）"
+            print(f"[ai] ⚠ 面板里没有含「{keyword}」的提示词（共 {n} 项，已补等+滚动）"
                   f"→ 跳过这一项，沿用当前提示词")
             _shot(page, "ai_shortcut_not_found")
             close_shortcut_panel(page)
@@ -1660,78 +1744,131 @@ def pick_shortcut(page: Page, keyword: str = "", index: int = 0,
     except Exception:
         pass
 
-    ok_click = False
-    try:
-        target.click(timeout=CLICK_FAST_TIMEOUT)
-        ok_click = True
-    except Exception as e:
-        print(f"[ai] ⚠ 常规点击失败：{str(e).splitlines()[0]}")
+    def _do_click() -> bool:
+        """点这一行（常规 → 行内标题 → force 三级降级）。"""
         try:
-            # 退化为点行内标题
+            target.click(timeout=CLICK_FAST_TIMEOUT)
+            return True
+        except Exception as e:
+            print(f"[ai] ⚠ 常规点击失败：{str(e).splitlines()[0]}")
+        try:
             t = target.locator(".row-title").first
             if t.count():
                 t.click(timeout=3000)
-                ok_click = True
+                return True
         except Exception:
             pass
-        if not ok_click:
-            try:
-                target.click(force=True, timeout=3000)
-                ok_click = True
-            except Exception as e2:
-                print(f"[ai] ✗ 点不动这一行：{str(e2).splitlines()[0]}")
+        try:
+            target.click(force=True, timeout=3000)
+            return True
+        except Exception as e2:
+            print(f"[ai] ✗ 点不动这一行：{str(e2).splitlines()[0]}")
+        return False
 
+    ok_click = _do_click()
     if not ok_click:
         _shot(page, "ai_shortcut_click_failed")
         return False
 
-    # ★ 效率改造：原来是固定 sleep 1.2s 等面板收起 + 那一行刷新。
-    #   现在等**面板收起**这一可见信号；面板若本来就关了则立刻返回。
-    #   ★ 注意：这里的等待结果**故意不作为成败判据**（成败已由 ok_click
-    #     决定），所以即使站点某些版本不自动关面板，也只会多等 1.5 秒，
-    #     不会被误判成失败 —— 行为上是安全的降级。
-    wait_gone(
-        lambda: any(page.locator(s).first.is_visible(timeout=60)
-                    for s in AI_SELECTORS["shortcut_panel"]
-                    if page.locator(s).count()),
-        timeout=1.5, interval=0.05, desc="快捷选项面板收起")
-    if verify_row:
-        wait_until(lambda: bool(current_shortcut(page)),
-                   timeout=1.0, interval=0.06, desc="快捷选项行刷新")
+    def _wait_panel_closed(t: float = 1.5) -> None:
+        """等面板收起（纯信号，不作成败判据）。"""
+        wait_gone(
+            lambda: any(page.locator(s).first.is_visible(timeout=60)
+                        for s in AI_SELECTORS["shortcut_panel"]
+                        if page.locator(s).count()),
+            timeout=t, interval=0.05, desc="快捷选项面板收起")
 
-    # ⑤ 回读断言：必须跟「点中的那一行」对得上才算成功
-    #   ★ verify_row=False 用于「审稿要求」场景——那边点中的面板没错，
-    #     但「那一行」不是续写弹窗的 shortcut_row，回读必然为空（噪音）。
-    if not verify_row:
-        if ok_click:
-            print("[ai] ✓ 已点中目标提示词（跳过行回读）")
-        return ok_click
+    def _read_back() -> str:
+        """回读当前选中态：续写读「续写要求」行，审稿读「审稿要求」行。"""
+        if verify_row:
+            return current_shortcut(page)
+        return current_review_requirement(page)
 
-    after = current_shortcut(page)
-    print(f"[ai] 选择后那一行显示：{after!r}")
-    if not after:
-        print("[ai] ✗ 回读不到快捷选项（可能没切成功）")
-        _shot(page, "ai_shortcut_switch_failed")
+    def _matches(after: str) -> bool:
+        """回读值是否命中这一行（关键词 / 整标题 / 标题核心词）。"""
+        if not after:
+            return False
+        if keyword and (keyword in after):
+            return True
+        if want and (want == after or want_core == after_core):
+            return True
+        if want_core and len(want_core) >= 4 and want_core[:8] in after:
+            return True
         return False
 
     # 点中行的标题（去掉「使用方法」等尾巴）
     want = txt.split("使用方法")[0].strip()
     want_core = want.split("（")[0].strip()          # 去掉（细腻优先…）
-    after_core = after.split("（")[0].strip()
 
-    hit = False
-    if keyword and (keyword in after):
-        hit = True
-    elif want and (want == after or want_core == after_core):
-        hit = True
-    elif want_core and len(want_core) >= 4 and want_core[:8] in after:
-        hit = True
+    # ★★★ 2026-10-05 用户报障修复：「点击后需要加一小点的延迟，
+    #   不然有时候加载不出来，导致根本没选上」。
+    #   做法：点完 → 等面板收起 → 回读；**没对上就再等、再点一次**。
+    #   · 续写场景（verify_row=True）老代码本来就回读，这里补上重试；
+    #   · 审稿场景（verify_row=False）老代码**完全不回读**（点完就 return True），
+    #     用户说的"根本没选上"正是这个洞 —— 改成回读「审稿要求」那一行。
+    _wait_panel_closed(1.5)
+    wait_until(lambda: bool(_read_back()), timeout=1.0, interval=0.06,
+               desc="提示词行刷新")
 
-    if hit:
-        print("[ai] ✓ 快捷键选项已切换")
+    after = _read_back()
+    if _matches(after):
+        print(f"[ai] ✓ 已选中「{(after or want)[:40]}」（回读确认）")
         return True
 
-    print(f"[ai] ✗ 点了「{want[:30]}」但当前显示「{after[:30]}」，没对上")
+    # —— 第一轮回读没对上：给一次「延迟 + 重试点击」 ——
+    print(f"[ai] ⚠ 回读未命中（当前「{(after or '(空)')[:30]}」）"
+          f"→ 延迟后重试点击一次")
+    time.sleep(0.6)                       # ★ 用户要求的那「一小点延迟」
+    # 面板可能已收起 → 需要重新打开再点
+    if not page.locator(".shortcut-picker-modal").count():
+        try:
+            if verify_row:
+                # 续写场景：重开面板
+                if not open_shortcut_panel(page):
+                    _shot(page, "ai_shortcut_retry_no_panel")
+                    return False
+            else:
+                # 审稿场景：重开那一行下拉
+                _safe_click(page.locator(AI_SELECTORS["review_selects"][0]).nth(1),
+                            label="审稿要求下拉(重试)")
+                wait_visible(page, AI_SELECTORS["shortcut_panel"],
+                             timeout=3.0, desc="审稿要求面板(重试)")
+            wait_shortcut_loaded(page, timeout=6.0, keyword=keyword)
+        except Exception as e:
+            print(f"[ai] ⚠ 重试前重开面板失败：{str(e).splitlines()[0]}")
+
+    t2, mb2 = _find_target()
+    if t2 is not None:
+        target = t2
+        try:
+            target.scroll_into_view_if_needed(timeout=CLICK_FAST_TIMEOUT)
+        except Exception:
+            pass
+        ok_click = _do_click()
+        _wait_panel_closed(1.5)
+        wait_until(lambda: bool(_read_back()), timeout=1.0, interval=0.06,
+                   desc="提示词行刷新(重试)")
+        after = _read_back()
+        if _matches(after):
+            print(f"[ai] ✓ 重试后已选中「{(after or want)[:40]}」（回读确认）")
+            return True
+        print(f"[ai] ✗ 重试后仍未命中（当前「{(after or '(空)')[:30]}」）")
+    else:
+        print("[ai] ✗ 重试时找不到目标行")
+
+    # ★ 最后一层：ok_click 成功但回读对不上 —— 对续写场景而言回读是硬判据
+    #   （老行为：返回 False 让上层决定）；审稿场景回读宿主不同、
+    #   偶尔读不到（老代码就完全不信回读），这里保持"点击成功即算过"，
+    #   但要打醒目的告警，别静默。
+    if not verify_row and ok_click:
+        print("[ai] ⚠ 审稿要求回读未命中，但点击已成功 → 按已选处理（请留意）")
+        _shot(page, "ai_review_req_unverified")
+        return True
+
+    if after:
+        print(f"[ai] ✗ 点了「{want[:30]}」但当前显示「{after[:30]}」，没对上")
+    else:
+        print("[ai] ✗ 回读不到快捷选项（可能没切成功）")
     _shot(page, "ai_shortcut_switch_failed")
     return False
 
@@ -3067,16 +3204,12 @@ def pick_review_requirement(page: Page, keyword: str = "",
         _shot(page, "ai_review_req_open_fail")
         return False
 
-    # ③ 用文字定位选提示词（复用续写的逻辑；★ 不回读续写那一行）
+    # ③ 用文字定位选提示词（复用续写的逻辑；★ verify_row=False → 内部回读
+    #    「审稿要求」那一行，并在没对上时延迟重试一次）
     ok = pick_shortcut(page, keyword=keyword, panel_already_open=True,
                        verify_row=False)
-    # ★ 效率改造：原来固定 sleep 0.5s 等那一行刷新。改成等回读出现关键词。
-    #   超时从 2.0 降到 1.0：回读本身只是读一次文本，真的成功会立刻命中；
-    #   1 秒还没命中就说明这一步没生效，再等也没用（原来 2 秒纯属白等）。
-    wait_until(lambda: keyword in (current_review_requirement(page) or ""),
-               timeout=1.0, interval=0.06, desc="审稿要求行刷新")
 
-    # ④ 回读断言
+    # ④ 回读断言（pick_shortcut 内部已等过，这里再确认一次最终态）
     after = current_review_requirement(page)
     if after and (keyword in after):
         print(f"[ai] ✓ 审稿要求已切换：{after[:50]}")
