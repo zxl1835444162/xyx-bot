@@ -429,9 +429,32 @@ def manual_login(page: Page, wait_seconds: int = 300,
 # ------------------------------------------------------------------ 统一入口
 
 def open_site_page(page: Page, wait: float = 3.0) -> None:
-    """打开站点首页（已注入登录态时，这里就是「已登录」状态）。"""
+    """打开站点首页（已注入登录态时，这里就是「已登录」状态）。
+
+    ★ 效率改造（2026-10-05，用户报「点击作品后，寻找按钮的过程很长」）：
+      原实现是 `goto` 后**固定 `time.sleep(wait)`**。调用方 goto_books 传
+      wait=2.5 ⇒ **每次开作品都白等 2.5 秒**（实测 goto_books 整段 2.78s，
+      其中绝大部分是这 2.5s）。
+      现在改成**条件等待「页面真的渲染出内容」**：SPA 骨架出现即返回
+      （实测通常 0.3~0.8s），不用再吃满固定时长。
+      超时仍用 `max(wait, 3.0)` —— 比原来更宽容，页面慢时最坏不会更差。
+    """
     page.goto(C.SITE["entry"], wait_until="domcontentloaded")
-    time.sleep(wait)
+    # ★ 条件等待：等 body 里有「可观的」实际内容（不是空骨架/白屏）。
+    #   ★ 2026-10-05 修正：原来只判 `innerText 非空`，但 SPA 加载初期
+    #     body 里可能就有零星的静态文字（如标题），判据太弱、会提前返回，
+    #     导致后续「找作品卡」失败。改成要求**内容达到一定长度**（>20 字），
+    #     这是一个更可靠的"首页真的渲染了"信号；超时仍用 max(wait,3.0)。
+    try:
+        from .waiting import wait_until as _wait_until
+        _wait_until(
+            lambda: bool(page.evaluate(
+                "() => (document.body && (document.body.innerText || '').trim().length > 20)")),
+            timeout=max(float(wait), 3.0), interval=0.08,
+            desc="站点首页渲染")
+    except Exception:
+        # 极端情况下页面对象异常 → 退回固定等待，保证行为不退化
+        time.sleep(wait)
 
 
 def verify_session(app, wait: float = 3.0) -> bool:

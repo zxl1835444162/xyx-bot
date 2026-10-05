@@ -407,6 +407,64 @@ check("duplicate paths deduped",
 check("shared PRIORITY_ORDER used",
       "PRIORITY_ORDER" in inspect.getsource(BD.get_recommended_browser), True)
 
+# ============================================================ 9. 「寻找按钮的过程很长」
+print("\n=== 9. 打开作品：等「要用的东西」出现，不固定睡 ===")
+
+# ★★★ 用户报障（2026-10-05）：
+#   「点击作品后，寻找 ai续写正文 按钮的过程很长」
+#   用户给出的思路（正确且我们都采纳了）：
+#   「你只要停留的时间够，点的按钮出来就行。或者你加个短小的随机延迟也可以。」
+#
+# ★ 本机探针实测坐实的两个真根因：
+#   ① **`.create-card` 首页也有** ⇒ 老 `_on_books_page` 把首页误判成作品页
+#      ⇒ 不导航 ⇒ `list_books()` 在首页数出 0 个作品
+#      ⇒ 报「作品页上没有找到任何作品」。
+#      同理，点侧边栏「作品」**不会改 URL hash**（仍是 xingyuexiezuo.com/）
+#      ⇒ URL 也不能当判据。唯一可靠判据 = **有已有作品卡**。
+#   ② `open_book` 里 `is_in_editor` 太弱（只看 URL）：编辑器外壳在了，
+#      但**左栏章节/工具栏还没渲染**就返回了 ⇒ 后面 open_chapter 找不到章节项、
+#      open_continue_dialog 第一次点空壳失败 → 重试一轮 → 整个"很久"。
+#
+# ★ 修法（按用户思路）：
+#   · 判据都改成「**下一步要用的东西**出现了」：作品卡 / 章节项 / 续写按钮。
+#   · 补短随机延迟（打散机械节奏）。
+#   · 固定 `sleep(wait)` 一律改成"最多等 wait 秒"的条件等待。
+import src.books as _BK
+import src.login as _LG
+import src.ai as _AI2
+
+_bk_src = open(_BK.__file__, encoding="utf-8").read()
+_lg_src = open(_LG.__file__, encoding="utf-8").read()
+_ai2_src = open(_AI2.__file__, encoding="utf-8").read()
+
+check_true("goto_books 不再固定 sleep(wait)",
+           "time.sleep(wait)" not in _bk_src.split("def goto_books")[1].split("def _on_books_page")[0])
+check_true("goto_books 等「作品列表出现」",
+           "作品列表出现" in _bk_src)
+check_true("_on_books_page 用「已有作品卡」判据（不再只认 .create-card）",
+           "existing_card" in _bk_src.split("def _on_books_page")[1].split("def _click_sidebar_books")[0])
+check_true("open_site_page 不再固定 sleep（条件等待渲染）",
+           "站点首页渲染" in _lg_src)
+check_true("_click_sidebar_books 先清活动弹窗（遮罩会拦住点击）",
+           "close_activity_modal(page, verbose=False)" in
+           _bk_src.split("def _click_sidebar_books")[1].split("def find_create_card")[0])
+check_true("_click_sidebar_books 有 JS 降级（避免 15s 超时）",
+           "→ JS 降级" in _bk_src)
+check_true("open_book 等「编辑器可用」（章节/工具栏出现）",
+           "编辑器可用（章节/工具栏出现）" in _bk_src)
+check_true("open_book 等「作品卡出现」",
+           "作品卡出现" in _bk_src)
+check_true("ai_batch_chapters 章间不再固定 sleep(chapter_delay)",
+           "\n        time.sleep(chapter_delay)" not in _ai2_src)
+check_true("章间等「切章后可用」",
+           "切章后可用（章间）" in _ai2_src)
+check_true("章间补随机延迟（human_pause）",
+           "A.human_pause" in _ai2_src)
+check_true("books.py 有随机延迟 human_pause 调用",
+           "A.human_pause" in _bk_src)
+check_true("存在 _chapter_ready（下一步要用的东西在不在）",
+           "def _chapter_ready" in _ai2_src)
+
 # ============================================================ 汇总
 print("\n" + "=" * 60)
 print(f"  通过 {len(PASS)} 项，失败 {len(FAIL)} 项")

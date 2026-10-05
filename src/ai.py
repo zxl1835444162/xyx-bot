@@ -4776,6 +4776,35 @@ def ensure_chapter(page: Page, no: int, wait: float = 2.0,
     return ok
 
 
+def _chapter_ready(page: Page) -> bool:
+    """★ 章间「可以继续下一章」的判据（2026-10-05 新增）。
+
+    ★ 用户指点：「你只要停留的时间够，点的按钮出来就行。」
+      —— 不要判断"站点稳没稳"，而是判断**下一步要用的东西在不在**。
+
+    下一章要用的东西是：
+      · 左栏的章节列表项（`.chapter-item`）—— 切章要用
+      · 或者「AI续写正文」按钮 —— 一条龙的入口
+    任一可见即认为可以继续。
+    任何异常都当作"未就绪"（继续等），绝不让本判据抛错影响主流程。
+    """
+    for sel in (AI_SELECTORS.get("chapter_item") or [".chapter-item"]):
+        try:
+            loc = page.locator(sel)
+            if loc.count() > 0:
+                return True
+        except Exception:
+            continue
+    for sel in AI_SELECTORS["btn_continue"]:
+        try:
+            loc = page.locator(sel)
+            if loc.count() > 0:
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def ai_batch_chapters(page: Page,
                       start: int = 1,
                       end: int = 10,
@@ -4923,7 +4952,19 @@ def ai_batch_chapters(page: Page,
         # ② 切到该章
         print(f"[batch] 切到第{no}章 …")
         open_chapter(page, which=f"第{no}章", wait=2.5)
-        time.sleep(chapter_delay)
+        # ★★ 2026-10-05（用户要求「改在应用层」+ 指点思路）：
+        #   原来是 `time.sleep(chapter_delay)`（默认 **每章固定睡 3 秒**）。
+        #   用户指点：「你只要停留的时间够，点的按钮出来就行。」
+        #   ⇒ 改成**等"下一步要用的东西"出现**（章节列表 / 续写按钮），
+        #     再配一个短随机延迟打散机械节奏。
+        #   `chapter_delay` 的语义 = **最长愿意等多久**（不再是固定睡眠）；
+        #   最坏情况与旧行为一致，正常情况每章省下 ~2.5 秒。
+        _cd = max(float(chapter_delay), 0.0)
+        if _cd > 0:
+            wait_until(lambda: _chapter_ready(page),
+                       timeout=_cd, interval=0.05, desc="切章后可用（章间）")
+        A.human_pause(0.2, 0.6)
+
 
         # ③ 生成 plot
         this_plot = plot_for(no) if plot_for else plot

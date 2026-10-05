@@ -30,6 +30,10 @@ from . import config as C
 from . import session as S
 from .waiting import wait_gone, wait_until, wait_visible
 
+# ★ 原生点击首试超时（毫秒）。站点残留遮罩常让原生点击永远失败（重试到超时），
+#   所以给短超时 + JS 降级 —— 与 src/ai.py 的 CLICK_FAST_TIMEOUT 同一策略。
+CLICK_FAST_TIMEOUT = 600
+
 
 # ---------------------------------------------------------------- 进入作品页
 
@@ -61,35 +65,91 @@ def goto_books(page: Page, wait: float = 3.0) -> bool:
         url = C.route_url("books")
         print(f"[books] 侧边栏未命中，直接打开路由 {url}")
         page.goto(url, wait_until="domcontentloaded")
-        time.sleep(wait)
 
-    time.sleep(wait)
+    # ★★ 2026-10-05 用户指点：「你只要停留的时间够，点的按钮出来就行。」
+    #   所以这里**等"下一步要用的东西"（作品卡）出现**，而不是固定睡 wait 秒。
+    #   `wait` 的语义变成"最长愿意等多久"（保留参数兼容，不再是无脑睡眠）。
+    #   配合一个短随机延迟打散节奏（避免机械操作被站点识别）。
+    def _books_ready() -> bool:
+        if _on_books_page(page):
+            return True
+        # 也接受"只剩 create-card 但确实在 books 路由"的情形
+        try:
+            if "#/books" in (page.url or "").lower():
+                for sel in C.BOOK_SELECTORS["create_card"]:
+                    if page.locator(sel).count() > 0:
+                        return True
+        except Exception:
+            pass
+        return False
+
+    wait_until(_books_ready, timeout=max(float(wait), 3.0) + 3.0,
+               interval=0.08, desc="作品列表出现")
+    A.human_pause(0.15, 0.45)          # ★ 随机延迟：打散机械节奏
     ok = _on_books_page(page)
     if ok:
-        # 进页后先把活动弹窗关掉（实测会盖满页面）
+        # 进页后先把活动弹窗关掉（实测会盖满页面，导致后续点击被拦）
         close_activity_modal(page, verbose=False)
     print(f"[books] {'✓ 已进入作品页' if ok else '✗ 未能确认进入作品页'}  URL={page.url}")
     return ok
 
 
 def _on_books_page(page: Page) -> bool:
-    """判断当前是否在作品页（靠「新建」入口卡是否存在）。"""
+    """判断当前是否在「作品列表页」——判据是**能看到作品列表的卡片**。
+
+    ★★ 2026-10-05（用户指点）：
+      「你只要停留的时间够，点的按钮出来就行。」
+      ——不要纠结"页面稳没稳/URL 对不对"，只看**下一步要用的东西在不在**。
+
+    实测拿到的关键事实：
+      · 站点首页也有 `.create-card`（"开始创作"入口）⇒ **不能只看入口卡**！
+        只看它会把首页误判成作品页（老代码就踩了这个坑：
+         首页 → 有 .create-card → 判"已在作品页" → 不导航
+         → list_books() 在首页数出 0 个作品 → 报"没有找到任何作品"）。
+      · 点侧边栏「作品」**不会改 URL hash**（还是 `xingyuexiezuo.com/`）
+        ⇒ **URL 也不能作判据**。
+
+    ⇒ 唯一可靠判据：**页面上有"已有作品卡"** `.book-card:not(.create-card)`。
+       （首页没有它；作品页一定有——哪怕是 0 作品的账号，
+        也要靠 `#/books` 路由兜底，见下面第 ② 条。）
+    """
+    # ① 有已有作品卡 → 铁定是作品页
+    for sel in C.BOOK_SELECTORS.get("existing_card", []):
+        try:
+            if page.locator(sel).count() > 0:
+                return True
+        except Exception:
+            continue
+
+    # ② 例外：账号下一本书都没有时，卡片数为 0 —— 这时**只能**认路由。
+    #    注意：这只在"确实没有作品卡"时才用，不会把首页误判成作品页
+    #    （首页会命中 ① 之外的 .create-card，但这里不认它）。
     try:
-        if page.locator(C.BOOK_SELECTORS["create_card"][0]).count() > 0:
+        if "#/books" in (page.url or "").lower():
             return True
     except Exception:
         pass
-    try:
-        return "books" in (page.url or "").lower()
-    except Exception:
-        return False
+
+    return False
 
 
 def _click_sidebar_books(page: Page) -> bool:
     """点侧边栏的「作品」菜单项。
 
     侧边栏在 `.sidebar-container` 里，精确到这个范围内找，避免点到别处。
+
+    ★★ 2026-10-05 实测踩坑（探针里亲眼看到 15 秒超时）：
+      点「作品」时被残留的 `.n-modal-mask`（活动弹窗的遮罩）拦住，
+      Playwright 重试到 `Locator.click: Timeout 15000ms exceeded`。
+      ⇒ 点之前**必须先清掉遮罩/活动弹窗**；点击失败也要**立刻 JS 降级**，
+        别在原地死等 15 秒。
     """
+    # ★ 先清活动弹窗（它留下的遮罩会拦住侧边栏点击）
+    try:
+        close_activity_modal(page, verbose=False)
+    except Exception:
+        pass
+
     scoped = [
         ".sidebar-container >> text=作品",
         ".sidebar-container a:has-text('作品')",
@@ -99,16 +159,27 @@ def _click_sidebar_books(page: Page) -> bool:
     for sel in scoped:
         try:
             loc = page.locator(sel).first
-            if loc.is_visible(timeout=1500):
-                loc.click()
-                print(f"[books] 点击侧边栏「作品」: {sel}")
-                # ★ 效率改造：原来固定 sleep 2.5s 等页面切换。
-                #   改成等**作品页的标志物出现**（新建入口卡 .create-card），
-                #   切换完成就立刻返回（通常几百毫秒）。
-                #   拿不到也不影响：调用方 goto_books 还会再兜底判断。
-                wait_visible(page, [".create-card"], timeout=6.0,
-                             desc="作品页就绪")
-                return True
+            if not (loc.count() and loc.is_visible(timeout=1200)):
+                continue
+            # ★ 短超时原生点击 → 失败立刻 JS 降级（避免 15 秒白等）
+            clicked = False
+            try:
+                loc.click(timeout=CLICK_FAST_TIMEOUT)
+                clicked = True
+            except Exception as e:
+                print(f"[books] ⚠ 侧边栏原生点击失败（{str(e).splitlines()[0]}）→ JS 降级")
+                try:
+                    loc.evaluate("e => e.click()")
+                    clicked = True
+                except Exception:
+                    pass
+            if not clicked:
+                continue
+            print(f"[books] 点击侧边栏「作品」: {sel}")
+            # ★ 等**作品列表渲染出来**这个可见信号（而不是固定 sleep 2.5s）
+            wait_visible(page, [".book-card:not(.create-card)", ".create-card"],
+                         timeout=6.0, desc="作品页就绪")
+            return True
         except Exception:
             continue
     return False
@@ -272,6 +343,13 @@ def open_book(page: Page, keyword: str, index: int | None = None,
         print("[open] ✗ 无法进入作品页")
         return False
 
+    # ★★ 2026-10-05 用户指点：「你只要停留的时间够，点的按钮出来就行。」
+    #   这里等的是**要用的东西**（作品卡）出现 —— 出现即走，不固定睡。
+    wait_until(lambda: page.locator(
+        ".book-card:not(.create-card), .create-card").count() > 0,
+        timeout=max(float(wait), 3.0), interval=0.08, desc="作品卡出现")
+    A.human_pause(0.1, 0.3)           # ★ 随机延迟打散节奏
+
     books = list_books(page)
     if not books:
         print("[open] ✗ 作品页上没有找到任何作品")
@@ -372,12 +450,14 @@ def open_book(page: Page, keyword: str, index: int | None = None,
         # ★ 现场实测（2026-10-04）：这里**每次都会走兜底** ——
         #   点作品卡后 URL 并不变（站点把编辑器开在了**新标签页**里，
         #   而 App.page 永远返回 pages[0]，所以主页面还停在作品页）。
-        #   旧代码因此每次白等满 3.0 秒才 fallback。现在：
-        #     - 轮询窗口缩到 1.2 秒（真跳了就立刻继续，没跳就快速兜底）
-        #     - 同时把「有没有多开标签页」记下来，方便排查
+        #   旧代码因此每次白等满 3.0 秒才 fallback。
+        # ★ 再优化（2026-10-05）：既然实测"点完 URL 就是不动"，
+        #   那 1.2 秒的等待基本是纯浪费。缩到 0.35s ——
+        #   真跳转的话（少数情况）0.35s 内早就 hash 变了；
+        #   没跳就立刻走 goto 兜底（goto 只需 ~0.1s）。
         pages_before = len(page.context.pages)
         hit = wait_until(lambda: want in (page.url or ""),
-                         timeout=1.2, interval=0.05, desc="跳转到编辑器")
+                         timeout=0.35, interval=0.05, desc="跳转到编辑器")
         if not hit.ok:
             extra = len(page.context.pages) - pages_before
             print("[open] ⚠ 点击后未跳转（URL 仍是作品页），改用直接跳转兜底"
@@ -408,14 +488,41 @@ def open_book(page: Page, keyword: str, index: int | None = None,
     ready = wait_until(lambda: is_in_editor(page),
                        timeout=max(float(wait), 3.0) + 2.0,
                        interval=0.08, desc="编辑器就绪")
-    if ready.ok:
-        t = current_editor_title(page)
-        print(f"[open] ✓ 已进入作品编辑器：{t or target['title']}"
-              f"（{ready.elapsed:.2f}s）")
-    else:
+    if not ready.ok:
         print("[open] ✗ 仍未进入编辑器（URL 或 DOM 都不像），中止")
         _shot(page, "open_book_unknown")
         return False
+
+    # ★★★ 2026-10-05（用户指点 + 实测坐实）：
+    #   「你只要停留的时间够，点的按钮出来就行。」
+    #
+    #   实测踩坑（探针亲眼看到）：
+    #     [open] ✓ 已进入作品编辑器：这里空空如也（0.00s）  ← is_in_editor 太弱
+    #     [ai] ✗ 左栏没有章节项                            ← 章节列表还没渲染
+    #     [ai] 点击 AI续写正文（JS 降级；原生点击被拦）      ← 点了个空壳
+    #     [ai] 弹窗未出现，清理干扰后重试 …                 ← 白费一轮
+    #     → 这就是用户说的「点击作品后，寻找 AI续写正文按钮的过程很长」！
+    #
+    #   is_in_editor 只要 URL 像编辑器就返回 True，但**左栏章节/工具栏还没渲染**。
+    #   ⇒ 这里补一段：**等"下一步要用的东西"（章节项 或 AI续写正文按钮）出现**。
+    #      出现即走（通常几百毫秒）；等不到也不算失败——交给后面各自的
+    #      open_chapter / open_continue_dialog 自己兜底（行为不退化）。
+    def _editor_usable() -> bool:
+        for sel in (".chapter-item", "button:has-text('AI续写正文')",
+                    ".tiptap.ProseMirror"):
+            try:
+                if page.locator(sel).count() > 0:
+                    return True
+            except Exception:
+                continue
+        return False
+
+    got = wait_until(_editor_usable, timeout=max(float(wait), 3.0),
+                     interval=0.08, desc="编辑器可用（章节/工具栏出现）")
+    t = current_editor_title(page)
+    print(f"[open] ✓ 已进入作品编辑器：{t or target['title']}"
+          f"（就绪 {ready.elapsed:.2f}s / 可用 {'✓' if got.ok else '✗ 超时'}）")
+    A.human_pause(0.1, 0.35)          # ★ 随机延迟打散节奏
 
     return True
 
@@ -498,7 +605,10 @@ def close_activity_modal(page: Page, verbose: bool = True) -> bool:
     for mark in activity_marks:
         try:
             modal = page.locator(f".n-modal{mark}{not_create}").first
-            if not modal.is_visible(timeout=600):
+            # ★ 效率改造（2026-10-05）：把存在性探测的 timeout 从 600ms 降到
+            #   200ms。5 个 mark 顺序探测时，只有「真存在」的那个才需要等；
+            #   不存在时每个省 400ms（最坏省 2s）。实测活动弹窗几乎不出现。
+            if not modal.is_visible(timeout=200):
                 continue
         except Exception:
             continue
@@ -516,7 +626,10 @@ def close_activity_modal(page: Page, verbose: bool = True) -> bool:
                     closed = True
                     if verbose:
                         print(f"[books]   已点关闭按钮 ({closer})")
-                    time.sleep(0.7)
+                    # ★ 条件等待：等这个弹窗真的消失（原来固定 sleep 0.7s）
+                    wait_gone(lambda m=modal: bool(m.count())
+                              and m.is_visible(timeout=60),
+                              timeout=1.5, interval=0.05, desc="活动弹窗关闭")
                     break
             except Exception:
                 continue
@@ -531,7 +644,9 @@ def close_activity_modal(page: Page, verbose: bool = True) -> bool:
                         closed = True
                         if verbose:
                             print(f"[books]   已点「{txt}」")
-                        time.sleep(0.7)
+                        wait_gone(lambda m=modal: bool(m.count())
+                                  and m.is_visible(timeout=60),
+                                  timeout=1.5, interval=0.05, desc="活动弹窗关闭")
                         break
                 except Exception:
                     continue
@@ -540,7 +655,9 @@ def close_activity_modal(page: Page, verbose: bool = True) -> bool:
         if not closed:
             try:
                 page.keyboard.press("Escape")
-                time.sleep(0.7)
+                wait_gone(lambda m=modal: bool(m.count())
+                          and m.is_visible(timeout=60),
+                          timeout=1.5, interval=0.05, desc="活动弹窗关闭(ESC)")
                 closed = True
                 if verbose:
                     print("[books]   已按 ESC 关闭")
@@ -552,7 +669,6 @@ def close_activity_modal(page: Page, verbose: bool = True) -> bool:
 
     # 最终确认：活动弹窗还在不在
     if closed:
-        time.sleep(0.5)
         still = False
         for mark in activity_marks:
             try:
