@@ -647,6 +647,139 @@ check_true("失败信息区分『无可见也无存在』",
 check_true("_has_start_button 也是逐个探测（两处判据已统一）",
            "for i in range(min(n, 4))" in ai_src)
 
+# ============================================ 11. 「字数」口径（2026-10-06 用户报障）
+print("\n=== 11. 本章字数：必须与站点显示的一致（不能把换行/空白数进去）===")
+# 用户报：「高级参数里认到的字数是不准确的」。
+# 真机取证（probes/probe_wc_site.py）：同一章第3章
+#   站点 = 4018 字；app 的 len(get_body_text()) = 4676（虚高 16.4%，其中 \n 有 629 个）
+#   第1章：站点 15676 vs app 20027（虚高 27.8%）
+# ⇒ 站点口径 = 非空白字符数；app 必须读站点自己的数，才对得上用户的肉眼。
+import src.ai as _AI3
+
+check("count_chars 不数换行", _AI3.count_chars("你好\n世界"), 4)
+check("count_chars 不数空格", _AI3.count_chars("a b c"), 3)
+check("count_chars 不数全角空格", _AI3.count_chars("你　好"), 2)
+check("count_chars 不数制表/回车", _AI3.count_chars("甲\t\r乙"), 2)
+check("count_chars 空串 = 0", _AI3.count_chars(""), 0)
+check("count_chars 纯换行 = 0", _AI3.count_chars("\n\n\n"), 0)
+check("_parse_word_num 纯数字", _AI3._parse_word_num("4018"), 4018)
+check("_parse_word_num 带千分位与'字'", _AI3._parse_word_num("4,018 字"), 4018)
+check("_parse_word_num 万字", _AI3._parse_word_num("2.1万字"), 21000)
+check("_parse_word_num 千字", _AI3._parse_word_num("1.2千字"), 1200)
+check("_parse_word_num 读不到 → -1", _AI3._parse_word_num(""), -1)
+check("_parse_word_num 非数字 → -1", _AI3._parse_word_num("abc"), -1)
+
+_ai3_src = open(_AI3.__file__, encoding="utf-8").read()
+check_true("存在 site_chapter_word_count（读站点自己显示的数）",
+           "def site_chapter_word_count(" in _ai3_src)
+check_true("存在 chapter_word_count（统一入口，展示/上报都用它）",
+           "def chapter_word_count(" in _ai3_src)
+check_true("site_chapter_word_count 读编辑器右下 .chapter-word-count",
+           ".chapter-word-count" in _ai3_src)
+check_true("site_chapter_word_count 有左栏 meta 兜底",
+           "chapter-item__meta" in _ai3_src)
+
+
+# ---- 用假 page 验证 chapter_word_count 的两条路径（不需要浏览器）----
+class _FakeEl:
+    """模拟 Playwright 的 Locator（真实 Playwright 的 nth(i) 返回的也是 Locator，
+    带 count() / first / inner_text() / is_visible()）。"""
+
+    def __init__(self, t):
+        self._t = t
+
+    def count(self):
+        return 1
+
+    @property
+    def first(self):
+        return self
+
+    def is_visible(self):
+        return True
+
+    def inner_text(self, timeout=None):
+        return self._t
+
+
+class _FakeLoc:
+    def __init__(self, items):
+        self._i = list(items)
+
+    def count(self):
+        return len(self._i)
+
+    def nth(self, i):
+        return self._i[i]
+
+    @property
+    def first(self):
+        return self._i[0]
+
+
+class _PageWithSiteCount:
+    """能读到站点 .chapter-word-count 的假页面。"""
+
+    def locator(self, sel):
+        if "chapter-word-count" in sel:
+            return _FakeLoc([_FakeEl("4018")])
+        raise RuntimeError("no such element")
+
+    def evaluate(self, js):
+        return "你好\n世界\n"          # 本机文本：4 个非空白字符
+
+
+class _PageNoSiteCount:
+    """站点元素全读不到的假页面（走本机兜底）。"""
+
+    def locator(self, sel):
+        raise RuntimeError("no dom")
+
+    def evaluate(self, js):
+        return "你好\n世界\n"
+
+
+check("chapter_word_count 优先用站点那个数",
+      _AI3.chapter_word_count(_PageWithSiteCount()), 4018)
+check("站点读不到 → 退回「非空白字符数」（不是 len）",
+      _AI3.chapter_word_count(_PageNoSiteCount()), 4)
+check("同样的文本，len() 会多算换行（旧口径的问题）",
+      len("你好\n世界\n"), 6)
+
+# ---- 静态断言：上报点不能再直接用 len(get_body_text) ----
+import re as _re3
+
+# ① ai_auto_chapter 的「起始正文」必须是站点口径
+check_true("ai_auto_chapter 的 body_before 用 chapter_word_count",
+           "body_before = chapter_word_count(page)" in _ai3_src)
+check_true("ai_auto_chapter 仍保留原始长度 _raw_before 做变更判据",
+           "_raw_before = len(get_body_text(page))" in _ai3_src)
+check_true("wait_body_change 传的是 _raw_before（判据）+ before_words（展示）",
+           "before_len=_raw_before," in _ai3_src
+           and "before_words=body_before" in _ai3_src)
+
+# ② 「已打开章节（正文 N 字）」/「正文已就绪」/「当前章正文」三处日志
+check_true("「已打开章节」日志用 chapter_word_count",
+           '已打开章节（正文 {chapter_word_count(page)} 字' in _ai3_src)
+check_true("「正文已就绪」日志用 chapter_word_count",
+           '正文已就绪（{chapter_word_count(page)} 字）' in _ai3_src)
+check_true("「当前章正文」日志用 chapter_word_count",
+           "chapter_word_count(page, body=_expect)" in _ai3_src)
+
+# ③ wait_body_change 返回站点口径（它一路传到界面结果表的「字数」列）
+_wbc_src = _ai3_src.split("def wait_body_change(")[1].split("def ai_auto_chapter(")[0]
+check_true("wait_body_change 返回站点口径字数",
+           "final = chapter_word_count(page)" in _wbc_src
+           or "final = int(_last[0])" in _wbc_src)
+check_true("wait_body_change 的变更判据仍用原始长度（最灵敏）",
+           "cur = len(get_body_text(page))" in _wbc_src)
+check_true("wait_body_change 会等站点字数刷新（不是读一次就走）",
+           "站点字数刷新" in _wbc_src)
+
+# ④ 结果表那条链路：words 来自 r["body"]，而 body 现在已是站点口径
+check_true("界面结果表的 words 仍来自 body（body 已是站点口径）",
+           'words=r.get("body") or 0' in _ai3_src)
+
 # ============================================ 汇总
 print("\n" + "=" * 60)
 print(f"  通过 {len(PASS)} 项，失败 {len(FAIL)} 项")

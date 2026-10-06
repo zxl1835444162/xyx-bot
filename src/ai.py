@@ -3401,7 +3401,14 @@ def editor_ready(page: Page,
 
 
 def get_body_text(page: Page) -> str:
-    """读正文编辑器里的纯文本。"""
+    """读正文编辑器里的纯文本。
+
+    ★★ 注意（2026-10-06）：这个返回值的 `len()` **不等于站点显示的「字数」**！
+      `.tiptap.ProseMirror` 的 `innerText` 会给**每个段落**补一个换行，
+      所以 len() 比站点那个数**虚高 16%~27%**（实测见 `count_chars` 的说明）。
+      凡是要**展示/上报字数**，一律用 `chapter_word_count(page)`，
+      不要直接 `len(get_body_text(page))`。
+    """
     try:
         return page.evaluate("""() => {
           const ed = document.querySelector('.tiptap.ProseMirror')
@@ -3410,6 +3417,102 @@ def get_body_text(page: Page) -> str:
         }""") or ""
     except Exception:
         return ""
+
+
+def count_chars(text: str) -> int:
+    """按**站点口径**数「字数」：空白不计（换行 / 空格 / 全角空格都不算）。
+
+    ★★ 为什么不用 `len(text)`（2026-10-06，探针 `probes/probe_wc_site.py` 实测）：
+
+      用户报「高级参数里认到的字数不准确」。真机取证 —— 同一章「第3章」：
+        · 站点左栏 `.chapter-item__meta`      = 「4,018 字」
+        · 站点编辑器右下 `.chapter-word-count` = 「4018」      ← 站点的权威数字
+        · app `len(get_body_text(page))`      = **4676**       ← ❌ 界面结果表用的
+        · app 去掉空白后                       = 4036
+        其中 `\\n` 有 **629** 个 —— 虚高 **658 字（+16.4%）**。第 1 章更夸张：
+        站点 15,676 vs app 20,027（**+27%**）。
+
+      生成结果弹窗同样：站点显示 3422，而 textarea 的 `.value` 长 3540，
+      差的 118 正好是段落换行 ⇒ **站点口径 = 非空白字符数**。
+
+      ⇒ 所以「字数」必须把空白剔掉，才对得上用户在站点上看到的数字。
+    """
+    if not text:
+        return 0
+    return sum(1 for ch in text if not ch.isspace())
+
+
+def _parse_word_num(s: str) -> int:
+    """把站点上的字数文本解析成 int。
+
+    兼容：'4018' / '4,018 字' / '2.1万字' / '1.2千字' / '1,234'
+    """
+    if not s:
+        return -1
+    t = s.strip().replace(",", "").replace("，", "")
+    m = re.search(r"(\d+(?:\.\d+)?)\s*万", t)
+    if m:
+        return int(float(m.group(1)) * 10000)
+    m = re.search(r"(\d+(?:\.\d+)?)\s*千", t)
+    if m:
+        return int(float(m.group(1)) * 1000)
+    m = re.search(r"\d+", t)
+    if m:
+        return int(m.group(0))
+    return -1
+
+
+def site_chapter_word_count(page: Page) -> int:
+    """读**站点自己显示的**本章字数（用户对照的那个数）。读不到返回 -1。
+
+    ① 编辑器右下角 `.chapter-word-count`（实测文本就是纯数字，如 "4018"）
+    ② 左栏**当前章**的 `.chapter-item__meta`（实测形如 "4,018 字"）
+
+    ★ 为什么优先读站点：这是用户眼睛看到的数字，读它**永远不会对不上**。
+      自己在本机算总有口径差（站点还会排掉 ProseMirror 的分章标记等）。
+    """
+    # ① 编辑器右下角的实时字数
+    try:
+        loc = page.locator(".chapter-word-count")
+        for i in range(min(loc.count(), 3)):
+            it = loc.nth(i)
+            try:
+                if not it.is_visible():
+                    continue
+                v = _parse_word_num(_text_of(it, timeout=300) or "")
+                if v > 0:
+                    return v
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+    # ② 左栏当前（active）章的字数
+    for sel in (".chapter-item--active .chapter-item__meta",
+                "[class*=chapter-item][class*=active] .chapter-item__meta",
+                ".chapter-item__meta"):
+        try:
+            loc = page.locator(sel)
+            if not loc.count():
+                continue
+            v = _parse_word_num(_text_of(loc.first, timeout=300) or "")
+            if v > 0:
+                return v
+        except Exception:
+            continue
+    return -1
+
+
+def chapter_word_count(page: Page, body: str | None = None) -> int:
+    """**本章字数**（统一口径，展示/上报一律用这个）。
+
+    优先「站点自己显示的数」；站点读不到时退回「非空白字符数」
+    （与站点口径一致，实测误差 < 1%）。
+    """
+    v = site_chapter_word_count(page)
+    if v > 0:
+        return v
+    return count_chars(body if body is not None else get_body_text(page))
 
 
 def chapter_items(page: Page):
@@ -3534,7 +3637,7 @@ def open_chapter(page: Page, which: str = "", index: int = 0,
     res = wait_until(_switched, timeout=max(wait, 2.0) * 2,
                      interval=0.08, desc="章节正文渲染")
     if res.ok:
-        print(f"[ai] ✓ 已打开章节（正文 {len(get_body_text(page))} 字，"
+        print(f"[ai] ✓ 已打开章节（正文 {chapter_word_count(page)} 字，"
               f"{res.elapsed:.2f}s）")
         return True
     print("[ai] ⚠ 点了章节但正文还是空的（可能是空章）")
@@ -4156,7 +4259,7 @@ def ai_review(page: Page,
         #    —— 这正是用户说的「有时候出现差错」。
         read_body_settled(page, timeout=8.0)
     else:
-        print(f"[ai] 正文已就绪（{len(get_body_text(page))} 字），跳过打开章节")
+        print(f"[ai] 正文已就绪（{chapter_word_count(page)} 字），跳过打开章节")
 
     # ① 打开审稿面板（右侧抽屉）
     #    ★★ 修正（2026-10-05）：必须**校验框内是当前章正文**，不符则关掉重开。
@@ -4169,7 +4272,8 @@ def ai_review(page: Page,
     #        · 仍然开着（用户手动开过 / 上一章残留）→ 校验失败 ⇒ 关掉重开
     _expect = strip_review_wrapper(get_body_text(page))
     if _expect:
-        print(f"[ai] 当前章正文 {len(_expect)} 字 → 开抽屉时会校验框内是否一致")
+        print(f"[ai] 当前章正文 {chapter_word_count(page, body=_expect)} 字"
+              " → 开抽屉时会校验框内是否一致")
     else:
         print("[ai] ⚠ 读不到当前章正文 → 开抽屉时不校验"
               "（退化为旧行为，站点首开一般会正常灌入）")
@@ -4359,7 +4463,8 @@ def close_continue_dialog(page: Page, wait: float = 1.5,
 
 
 def wait_body_change(page: Page, before_len: int = -1,
-                     timeout: float = 20.0, poll: float = 1.0) -> int:
+                     timeout: float = 20.0, poll: float = 1.0,
+                     before_words: float | None = None) -> int:
     """★ 等正文真正写入编辑器（采纳之后）。
 
     ★ 为什么要等：点了「采纳使用」≠ 正文立刻就在编辑器里。
@@ -4367,31 +4472,70 @@ def wait_body_change(page: Page, before_len: int = -1,
       不等的话下一环节（审稿）可能读到**空正文或旧正文**。
 
     Args:
-        before_len: 采纳前的正文字数（-1 = 不比较，只要非空就算好）
-        timeout:    最多等多久
+        before_len:   采纳前的**原始正文长度**（`len(get_body_text())`，含换行）
+                      —— 只用它做「变了没」的判据（最灵敏，不受口径影响）；
+                      -1 = 不比较，只要非空就算好
+        timeout:      最多等多久
+        before_words: 采纳前的**展示用字数**（站点口径）。只影响日志文案
+                      （`None` = 沿用 before_len，保持旧行为）
 
     Returns:
-        int 最终正文字数（超时则返回当前值）
+        int 最终正文**字数（站点口径）**——超时则返回当前值。
+        ★★ 2026-10-06：返回值从「含换行的原始长度」改成「站点口径字数」，
+          因为它会一路传到界面结果表的「字数」列。老口径实测虚高 16%~27%。
     """
-    print(f"[ai] --- 等正文写入（采纳前 {before_len} 字）---")
+    _bw = before_len if before_words is None else int(before_words)
+    print(f"[ai] --- 等正文写入（采纳前 {_bw} 字）---")
     last = [-1]
     # ★ 效率改造：原实现是「先 sleep(poll=1.0) 再检查」→ 条件早就满足也要
     #   白等 1 秒，且粗轮询让最坏情况再多等 1 秒。
     #   现在改为**先检查后等待**、并把轮询降到 0.1s：
     #   正文已经写好时立刻返回（≈0 秒），没写好也是 0.1s 粒度跟进。
     def _cond():
-        cur = len(get_body_text(page))
+        cur = len(get_body_text(page))      # ★ 判据仍用原始长度（最灵敏）
         if cur != last[0]:
-            print(f"[ai]   正文当前 {cur} 字")
+            # ★ 日志展示用站点口径 —— 与用户在站点上看到的数字一致
+            print(f"[ai]   正文当前 {chapter_word_count(page)} 字")
             last[0] = cur
         return cur if (cur > 0 and (before_len < 0 or cur != before_len)) else None
 
     res = wait_until(_cond, timeout=timeout, interval=0.1, desc="正文写入")
     if res.ok:
-        print(f"[ai] ✓ 正文已更新：{before_len} → {res.value} 字")
-        return int(res.value)
-    print(f"[ai] ⚠ 等正文写入超时（当前 {last[0]} 字）")
-    return last[0] if last[0] > 0 else 0
+        # ★★ 站点那个「本章字数」是 Vue 计算属性，可能有极短的刷新延迟。
+        #    这里用「连续两次读数一致」判定它已经稳定，最多等 1.5s
+        #    （等不到也用当前值，不阻塞流程）。
+        final = -1
+        try:
+            _last = [None]
+            _stable = [0]
+
+            def _settled() -> bool:
+                v = site_chapter_word_count(page)
+                if v <= 0:
+                    return False
+                if v == _last[0]:
+                    _stable[0] += 1
+                else:
+                    _last[0] = v
+                    _stable[0] = 0
+                return _stable[0] >= 1
+
+            wait_until(_settled, timeout=1.5, interval=0.15, desc="站点字数刷新")
+            if _last[0] and _last[0] > 0:
+                final = int(_last[0])
+        except Exception:
+            pass
+        if final <= 0:
+            final = chapter_word_count(page)
+        if final <= 0:
+            final = count_chars(get_body_text(page))
+        print(f"[ai] ✓ 正文已更新：{_bw} → {final} 字")
+        return int(final)
+    # ★ 超时：沿用旧语义 —— 返回**当前**字数（读不到就是 0），
+    #   让上层按"正文为空"判定失败，而不是返回 -1 显示成「-1 字」。
+    _cur = chapter_word_count(page)
+    print(f"[ai] ⚠ 等正文写入超时（当前 {_cur} 字）")
+    return int(_cur) if _cur > 0 else 0
 
 
 def ai_auto_chapter(page: Page,
@@ -4544,7 +4688,13 @@ def ai_auto_chapter(page: Page,
             first = min(nos) if nos else 1
             print(f"[auto] 未指定章节，打开第{first}章（最小章号，避免切到最新章）")
             open_chapter(page, which=f"第{first}章")
-    body_before = len(get_body_text(page))
+    # ★★ 两个口径分开（2026-10-06）：
+    #   · _raw_before = 原始长度（含换行）→ 唯一用途：给 wait_body_change
+    #     判「正文变了没」（最灵敏，不受口径影响）
+    #   · body_before = **站点口径字数** → 唯一用途：展示 / 上报
+    #     （老代码把 len(get_body_text()) 当字数用，实测虚高 16%~27%）
+    _raw_before = len(get_body_text(page))
+    body_before = chapter_word_count(page)
     print(f"[auto] 起始正文：{body_before} 字")
 
     # ================= 阶段一：续写 =================
@@ -4630,7 +4780,7 @@ def ai_auto_chapter(page: Page,
     if settle and settle > 0:
         _sr = wait_until(
             lambda: get_body_text(page).strip() != "" and
-            len(get_body_text(page)) != body_before,
+            len(get_body_text(page)) != _raw_before,      # ★ 原始长度判据
             timeout=float(settle), interval=0.06, desc="等正文写入(settle)")
         if _sr.ok:
             print(f"[auto] ✓ 正文已写入（{_sr.elapsed:.2f}s，settle 提前结束）")
@@ -4638,7 +4788,9 @@ def ai_auto_chapter(page: Page,
             print(f"[auto]   settle 用满 {settle:.1f}s，交给 wait_body_change 继续等")
 
     # 等正文真的变了（采纳生效）
-    new_len = wait_body_change(page, before_len=body_before, timeout=25.0)
+    # ★ before_len 用**原始长度**（判据）、before_words 用**站点口径**（展示）
+    new_len = wait_body_change(page, before_len=_raw_before,
+                               before_words=body_before, timeout=25.0)
     result["body"] = new_len
     if new_len <= 0:
         print("[auto] ✗ 正文为空，无法审稿，终止")
@@ -4646,7 +4798,7 @@ def ai_auto_chapter(page: Page,
         _cleanup_tail()          # ★ 失败更要清（弹窗多半正卡在异常态）
         return result
     if body_before >= 0 and new_len == body_before:
-        print(f"[auto] ⚠ 正文长度没变（{new_len}），可能采纳没生效，仍继续审稿")
+        print(f"[auto] ⚠ 正文字数没变（{new_len}），可能采纳没生效，仍继续审稿")
 
     if not do_review:
         print("[auto] do_review=False，停在衔接完成")
