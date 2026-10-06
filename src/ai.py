@@ -1985,12 +1985,46 @@ def pick_shortcut(page: Page, keyword: str = "", index: int = 0,
 
 RELATE_DROPDOWN_SEL = ".n-modal button.overflow-hidden"
 
+# ★★ 2026-10-06（用户问「他每次生成都选择了最近十章吗？为什么这次没选上」）：
+#   老实现是**全页**扫 `.n-modal button.overflow-hidden`。
+#   全页扫有个隐患：一旦上一章的续写弹窗还**残留在 DOM 里**
+#   （我们已知本站会留残留弹窗/遮罩），而残留那个停在「最近10章」，
+#   这里就可能读到**残留弹窗的值** ⇒ 误判"已是最近10章" ⇒ **静默跳过**，
+#   而当前这个弹窗其实还是站点默认的「最近5章」。
+#   ⇒ 现在改成：**优先只在"当前续写弹窗"里找**
+#     （= 含「开始 AI 续写」按钮、且可见的那个 modal），
+#     找不到再退回全页（保证不比旧行为差）。
+_CONTINUE_MODAL_SEL = ".n-modal:has(button:has-text('开始 AI 续写'))"
 
-def _relate_dropdown(page: Page):
-    """定位「最近N章 ⌄」下拉按钮（找不到返回 None）。只读，不点击。"""
+
+def _relate_scope_roots(page: Page):
+    """按优先级返回「应该在哪些容器里找关联下拉」的 Locator 列表。
+
+    ① 当前续写弹窗（含「开始 AI 续写」按钮）—— 最准
+    ② 全页（None）—— 兜底
+    """
+    roots = []
+    try:
+        cur = page.locator(_CONTINUE_MODAL_SEL)
+        for i in range(min(cur.count(), 3)):
+            c = cur.nth(i)
+            try:
+                if c.is_visible(timeout=120):
+                    roots.append(c)
+                    break            # 只要最靠前的那个可见弹窗
+            except Exception:
+                continue
+    except Exception:
+        pass
+    roots.append(None)               # None = 全页兜底
+    return roots
+
+
+def _relate_dropdown_in(root):
+    """在给定容器里找「最近N章 ⌄」下拉按钮（root=None → 全页）。"""
     # 主路径：Tailwind 的 overflow-hidden 类把下拉按钮和「最近3章」区分开
     try:
-        cands = page.locator(RELATE_DROPDOWN_SEL).filter(
+        cands = root.locator(RELATE_DROPDOWN_SEL).filter(
             has_text=re.compile(r"^最近\d+章$"))
         n = cands.count()
         for i in range(n):
@@ -2007,7 +2041,8 @@ def _relate_dropdown(page: Page):
 
     # 兜底：任何"文字是 最近N章 且带 svg"的 button（排除无 svg 的「最近3章」）
     try:
-        allb = page.locator(".n-modal button")
+        allb = root.locator(".n-modal button" if root is None
+                            else "button")
         for i in range(allb.count()):
             b = allb.nth(i)
             try:
@@ -2019,6 +2054,18 @@ def _relate_dropdown(page: Page):
                 continue
     except Exception:
         pass
+    return None
+
+
+def _relate_dropdown(page: Page):
+    """定位「最近N章 ⌄」下拉按钮（找不到返回 None）。只读，不点击。
+
+    ★ 优先在**当前续写弹窗**里找，避免读到残留弹窗的旧档位（见上方说明）。
+    """
+    for root in _relate_scope_roots(page):
+        b = _relate_dropdown_in(root)
+        if b is not None:
+            return b
     return None
 
 
@@ -2048,7 +2095,8 @@ def _scroll_relate_into_view(page: Page) -> None:
         pass
 
 
-def relate_chapters(page: Page, count: int = 10, force: bool = False) -> bool:
+def relate_chapters(page: Page, count: int = 10, force: bool = False,
+                    _retried: bool = False) -> bool:
     """关联最近 N 章。
 
     流程：定位「最近N章 ⌄」按钮 → （已是目标档就跳过）→ 点箭头展开菜单
@@ -2060,6 +2108,12 @@ def relate_chapters(page: Page, count: int = 10, force: bool = False) -> bool:
 
     ★ 效率（2026-10-04 实测口径）：已是对应档位时 **0 秒 0 点击**；
       需要切换时约 0.3~0.6 秒（原来固定 6.2 秒，且第 2 章起必失败）。
+
+    ★★ 2026-10-06 加固（用户问「每次生成都选了最近十章吗？为什么这次没选上」）：
+      1. 下拉按钮**只在当前续写弹窗里找**（`_relate_dropdown`），
+         避免读到上一章残留弹窗的旧档位 ⇒ 误判"已是10章"而静默跳过
+      2. 回读要求**连续两次**一致（防菜单开着时的假命中）
+      3. 失败会自动**重试一轮**（关掉菜单重新展开）
     """
     print(f"[ai] --- 关联最近 {count} 章 ---")
 
@@ -2074,10 +2128,17 @@ def relate_chapters(page: Page, count: int = 10, force: bool = False) -> bool:
         return False
 
     # ★ 幂等：已经是目标档位 → 直接成功，不点也不等
+    #   ★★ 但要**再确认一次**（两次读数一致才敢跳过）：
+    #      "跳过"是最危险的分支 —— 读错了就会带着站点默认档位（最近5章）
+    #      去生成，而且日志上完全看不出异常。宁可多花 1 次只读判断。
     cur = current_relate_count(page)
     if cur == count and not force:
-        print(f"[ai] ✓ 关联章节已是「最近{count}章」，跳过（0 点击）")
-        return True
+        if current_relate_count(page) == count:
+            print(f"[ai] ✓ 关联章节已是「最近{count}章」，跳过（0 点击）")
+            return True
+        print(f"[ai] ⚠ 档位读数不稳（读到「最近{cur}章」但再读不一致）"
+              "→ 不敢跳过，重设一遍")
+        cur = current_relate_count(page)      # 重新读一个真实值用于日志
 
     try:
         btn.scroll_into_view_if_needed(timeout=1500)
@@ -2131,16 +2192,41 @@ def relate_chapters(page: Page, count: int = 10, force: bool = False) -> bool:
             return False
 
     # ④ ★ 成败判据 = **回读按钮文字**（不再用"等菜单收起"那种必然超时的判据）
-    res = wait_until(lambda: current_relate_count(page) == count,
-                     timeout=3.0, interval=0.08,
+    #    ★★ 2026-10-06 加固：要求**连续两次**读数都等于目标档才算数。
+    #       原因：菜单还开着的那一刻，列表里的「最近10章」选项也可能被
+    #       `最近\d+章` 的文本匹配到 ⇒ 单次读数可能是**假命中**
+    #       （看着"已选上"，其实设置没生效）。连续两次一致就基本排除了。
+    _hit = [0]
+
+    def _confirmed() -> bool:
+        if current_relate_count(page) == count:
+            _hit[0] += 1
+        else:
+            _hit[0] = 0
+        return _hit[0] >= 2
+
+    res = wait_until(_confirmed, timeout=3.0, interval=0.08,
                      desc=f"档位回读=最近{count}章")
     if res.ok:
-        print(f"[ai] ✓ 已选「最近{count}章」（回读确认，{res.elapsed:.2f}s）")
+        print(f"[ai] ✓ 已选「最近{count}章」"
+              f"（回读确认 ×2，{res.elapsed:.2f}s）")
         return True
+
+    # ★ 一次没成 → 关掉菜单、重试一轮（菜单状态不对时重试往往就好）
+    if not _retried:
+        print("[ai] ⚠ 档位没生效 → 关掉菜单重试一次")
+        try:
+            page.keyboard.press("Escape")
+        except Exception:
+            pass
+        time.sleep(0.3)
+        if relate_chapters(page, count=count, force=True, _retried=True):
+            return True
 
     now = current_relate_count(page)
     print(f"[ai] ✗ 点了「最近{count}章」但档位没生效（当前 "
-          f"{'最近%d章' % now if now > 0 else '读不到'}）")
+          f"{'最近%d章' % now if now > 0 else '读不到'}）"
+          "★ 本次生成将用**站点默认档位**，前文关联会变弱")
     _shot(page, "ai_count_option_missing")
     return False
 

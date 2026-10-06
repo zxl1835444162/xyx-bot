@@ -333,8 +333,11 @@ check_true("存在 current_relate_count（回读当前档位）",
            hasattr(AI, "current_relate_count"))
 check_true("存在 _relate_dropdown（按 overflow-hidden 类定位下拉）",
            hasattr(AI, "_relate_dropdown"))
-check_true("_relate_dropdown 用 overflow-hidden 区分「最近3章」",
-           "overflow-hidden" in _func_src("_relate_dropdown"))
+# ★ 2026-10-06：定位逻辑拆成了 _relate_dropdown_in（可在指定容器里找），
+#   _relate_dropdown 只负责"选哪个容器"。所以两处任一含 overflow-hidden 即可。
+check_true("定位下拉用 overflow-hidden 区分「最近3章」",
+           "overflow-hidden" in _func_src("_relate_dropdown")
+           or "overflow-hidden" in _func_src("_relate_dropdown_in"))
 # 旧代码结尾的 wait_gone(text=最近N章) 必然超时 3 秒（选完后按钮文字就是它）
 check_true("relate_chapters 不再调 wait_gone（那条判据必然超时 3 秒）",
            "wait_gone" not in _rel)

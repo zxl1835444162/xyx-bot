@@ -780,6 +780,48 @@ check_true("wait_body_change 会等站点字数刷新（不是读一次就走）
 check_true("界面结果表的 words 仍来自 body（body 已是站点口径）",
            'words=r.get("body") or 0' in _ai3_src)
 
+# ============================================ 12. 关联最近 N 章必须真的设上（2026-10-06）
+print("\n=== 12. 「关联最近10章」：每次生成都要真的设上 ===")
+# 用户问：「他每次生成，都选择了最近十章吗？为什么这次没有选上最近十章呢」
+# 真机实测（probes/probe_relate10.py）：
+#   · 站点**每次新开弹窗都回到默认「最近5章」**（关掉再开 ×2、换章 ×1，全读到 5）
+#   · 所以 app 每次都必须真的把它改成 10 —— 不能靠"读一次就跳过"蒙
+# 三个加固点：① 只在当前续写弹窗里读（防残留弹窗误判）
+#            ② 回读要连续两次一致（防菜单开着时假命中）
+#            ③ 失败自动重试一轮
+_ai4_src = open(_AI3.__file__, encoding="utf-8").read()
+
+check_true("存在 _relate_dropdown_in（可指定容器搜索）",
+           "def _relate_dropdown_in(" in _ai4_src)
+check_true("存在 _relate_scope_roots（按优先级给容器）",
+           "def _relate_scope_roots(" in _ai4_src)
+check_true("优先只在「含开始按钮的续写弹窗」里找下拉",
+           "_CONTINUE_MODAL_SEL" in _ai4_src
+           and "开始 AI 续写" in _ai4_src.split("_CONTINUE_MODAL_SEL = ")[1][:120])
+check_true("_relate_dropdown 遍历 scopes（弹窗优先 → 全页兜底）",
+           "for root in _relate_scope_roots(page):" in _ai4_src)
+
+_rel_src = _ai4_src.split("def relate_chapters(")[1].split("def start_generate(")[0]
+check_true("relate_chapters 有 _retried 参数（供内部重试）",
+           "_retried: bool = False" in _rel_src)
+check_true("回读要求连续两次一致（_hit 计数 >= 2）",
+           "_hit[0] >= 2" in _rel_src)
+check_true("回读日志标注 ×2（与单次读区分开）",
+           "回读确认 ×2" in _rel_src)
+check_true("失败会关菜单重试一轮",
+           'page.keyboard.press("Escape")' in _rel_src
+           and "关掉菜单重试一次" in _rel_src)
+check_true("失败重试走 _retried=True（防无限递归）",
+           "_retried=True" in _rel_src)
+check_true("「已是目标档」跳过分支也做二次确认",
+           "档位读数不稳" in _rel_src)
+check_true("失败日志明确提示将用站点默认档位",
+           "本次生成将用**站点默认档位**" in _rel_src)
+
+# 真机取证结论也钉进测试：站点默认是 5，不是 10
+check_true("relate_chapters 仍会在不是目标档时真的去点（不是纯读）",
+           "展开菜单" in _rel_src)
+
 # ============================================ 汇总
 print("\n" + "=" * 60)
 print(f"  通过 {len(PASS)} 项，失败 {len(FAIL)} 项")
