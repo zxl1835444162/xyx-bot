@@ -355,6 +355,52 @@ def ai_auto_chapter( / def _visible( / def wait_generation( 各出现 1 次
 > 是最典型、也最难查的拆分副作用。用"会不会被重新赋值"来筛选需要转发的名字，
 > 是从 `global` 声明反查出来的（全项目只有 `LAST_DECISION` 一个）。
 
+## Phase C3 · 关于 `ui/pages/run.py`（1286 行）—— 决定**不拆**
+
+它是 `RunMixin` 一个类、36 个方法。我评估过能不能拆成 6 个 mixin
+（骨架/表单/预检/控制/进度/收尾），技术上可行：**无 `super()` 调用**，
+状态全是 `self._xxx`（70 个）——mixin 组合不会有 MRO 陷阱。
+
+但**不拆**，理由三条：
+
+1. **它是一个页面的完整逻辑**。这 36 个方法互相调用（`_run_build_status` 会调
+   `_run_start`/`_run_stop`/`_run_precheck_deep`），拆开只是把"从上往下读一遍就懂"
+   变成"在 6 个文件之间跳"。可维护性不升反降。
+2. **判据应该是"能否独立成职责"，不是行数**。`ai.py` 能拆是因为里面是
+   8 个互不相同的职责（选择器/元素/弹窗/模型/快捷指令/关联/生成/审稿）；
+   而这个类只有一件事：把「跑章」这一页搭起来并驱动它。
+3. **参考项目也不这么干**。对齐的 `ma-c`（寒山）里 `app.py` 本身就是 5700 行单文件，
+   真正拆出去的是*业务模块*（`novel_publisher/`、平台注册表、任务注册表）。
+
+所以 Phase C 到此收工：**拆的是"一个文件里塞了多个职责"的模块，不拆"一个界面的完整逻辑"**。
+如果哪天 `run.py` 里冒出第二个页面的逻辑（或者方法数继续涨到 60+），再拆也不迟。
+
+---
+
+## 收尾 · 最终形态
+
+```
+根目录（19 项）：README.md CHANGELOG.md pyproject.toml requirements*.txt
+                main.py(薄壳) run_gui.py launcher.py 启动.bat build.bat
+                xyxbot/ tests/ tools/ docs/ packaging/ scripts/ .github/
+                .gitignore .gitattributes
+```
+
+| 项 | 重构前 | 重构后 |
+|---|---|---|
+| 版本控制 | 无 `.git`（46 次历史只在远端） | 60 次提交，历史两头都在（远端 46 + 本次 14） |
+| 根目录文件 | 30 个（含 12 个一次性脚本、6 个计划文档） | 19 项，脚本进 `tools/`、文档进 `docs/` |
+| 包结构 | `src/` + 平级 `ui/` | 单一 `xyxbot/`，界面在 `xyxbot/ui/` |
+| 入口 | `main.py`(560 行) / `run_gui.py` / `launcher.py`，两个 venv | `python -m xyxbot` 与 `python main.py` 等价；单一 `.venv` 由 `launcher.py` 决定 |
+| 版本号 | 散落（CI 里又写死一次） | `xyxbot/version.py` 唯一真相源 |
+| 测试 | 12 个用例，CI 里硬编码清单 | `tests/run_all.py` 自动发现 + 超时 + 落日志；CI 只调它 |
+| 断言 | 1015 项全绿 | 1015 项全绿（每一步都以此为验收尺子） |
+| README | 1283 行（混合产品说明/迭代日记/实测输出） | 109 行产品说明书；细节进 `docs/USAGE_DETAIL.md`，历史进 `CHANGELOG.md` |
+| 最大源码文件 | `ai.py` 5378 行 | `ai/flows.py` 966 行 |
+
+> **业务行为零改动**：选择器、等待时长、风控策略、AI 提示词、界面布局，
+> 全部原样搬运 —— 重构只动"代码住在哪"，不动"它做什么"。
+
 ---
 
 ## 路径对照表（给翻历史文档用）
