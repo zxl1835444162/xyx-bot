@@ -271,6 +271,58 @@ module_source("ui/theme.py")   # 拆分之后  → 包内所有 .py 的拼接（
 
 **验收**：`tests/run_all.py` → 12/12 用例通过、1015 项断言全绿。
 
+## Phase C1 · 拆开 `xyxbot/ai.py`（5378 行 → 12 个子模块）
+
+**结果**
+
+```
+xyxbot/ai/
+├── __init__.py    64 行   按拓扑序全量再导出（100 个名字）
+├── selectors.py  288 行   选择器与站点常量表（AI_SELECTORS 等 14 个）
+├── elements.py   334 行   底层元素定位/点击/填写/取消标志（15 个）
+├── dialog.py     367 行   续写弹窗与「残留结果页」
+├── current.py     86 行   读取页面「当前值」（模型/档位/快捷指令/审稿要求）
+├── model.py      414 行   模型、联想档位、剧情
+├── shortcuts.py  492 行   快捷指令面板
+├── relate.py     246 行   「关联最近 N 章」
+├── body.py       308 行   正文编辑器与字数统计
+├── generate.py   520 行   生成与等待
+├── chapters.py   292 行   章节导航
+├── review.py     914 行   AI 审稿
+└── flows.py      953 行   对外流程：续写/审稿/一条龙/批量跑章
+```
+
+最大文件从 **5378 行降到 953 行**；对外接口零变化。
+
+**做法（机械 + 可验证）**
+
+1. 按 AST 取顶层语句，**按原始行区间整段搬运** —— 连注释、空行、"为什么这么写"的
+   实测记录一起搬，不重排、不改写。
+2. 一张「名字 → 目标模块」表分组（就是上面 12 个模块的职责划分）。
+3. 为每条顶层语句算出它**引用了哪些顶层名字**（Name 读取，扣除参数/局部变量），
+   据此得出模块间依赖，再做**拓扑排序**。依赖是客观事实，交给程序算比人拍脑袋可靠：
+   ```
+   selectors → elements → dialog → current → model → shortcuts → relate → body
+             → generate → chapters → review → flows
+   ```
+4. `__init__.py` 按拓扑序全量再导出（含 `_visible` 这种私有名），
+   所以外部 `from xyxbot import ai as AI; AI.xxx(...)` 一行都不用改。
+
+**过程中抓到并解决的真问题（都是"手拆一定会踩"的）**
+
+| # | 问题 | 表现 | 处理 |
+|---|---|---|---|
+| 1 | **循环依赖** | `shortcuts ↔ review`：`pick_shortcut→current_review_requirement`，`pick_review_requirement→pick_shortcut` | 把"读页面当前值"的读取器抽成 `ai/current.py`，依赖变单向 |
+| 2 | **相对导入失效** | `from . import config as C` 原指 `xyxbot.config`，搬进子包后变成 `xyxbot.ai.config` → ImportError | 统一改成绝对导入 `from xyxbot import config as C` |
+| 3 | **会被重新赋值的模块级状态** | `LAST_DECISION` 由 `ai_continue` 写入，UI 用 `AI.LAST_DECISION` 读 → star-import 只留导入时副本，UI 会读到**旧章的数据** | 用 PEP 562 模块级 `__getattr__` 转发到 `ai/flows.py`；实测改值后读到的立刻是当前值 |
+| 4 | 测试里 4 处 `open(MOD.__file__).read()` | 拆包后 `__file__` 指向 64 行的 `__init__.py`，18 条断言全红 | 改用 `S.module_source("src/ai.py")` |
+
+**验收**：`tests/run_all.py` → 12/12 用例通过、**1015 项断言全绿**；`python -m xyxbot selftest` → exit 0。
+
+> 第 3 条值得单独记一笔：它不会报错，只会让界面显示"上一章的字数与决策" ——
+> 是最典型、也最难查的拆分副作用。用"会不会被重新赋值"来筛选需要转发的名字，
+> 是从 `global` 声明反查出来的（全项目只有 `LAST_DECISION` 一个）。
+
 ---
 
 ## 路径对照表（给翻历史文档用）
