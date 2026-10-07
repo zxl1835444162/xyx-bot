@@ -1,21 +1,27 @@
-# Windows 批处理必须 CRLF，否则解析错乱
+# =============================================================================
+#  换行符策略
+#  注意：.gitattributes 里**最后匹配的规则生效**，所以通用规则写前面、
+#        具体例外写在后面，否则 `*` 会把下面的例外全部吃掉。
+# =============================================================================
+
+# 默认：所有文本文件在仓库里存 LF，工作区也是 LF。
+# 理由：CI 要跑 macOS/Linux；而且 Windows 上 `Path.write_text()` 默认把 \n
+# 写成 \r\n，一不小心整份文件就"全变了"（本项目真的踩过一次）。
+* text=auto eol=lf
+
+# 例外：Windows 批处理必须 CRLF，否则 cmd 解析有边界问题
 *.bat text eol=crlf
 *.cmd text eol=crlf
 
-# 其余文本一律 LF：源码要跨平台（CI 跑 macOS/Linux），
-# 而且 Windows 上 `Path.write_text()` 默认会把 \n 写成 \r\n，
-# 一不小心就让整份文件"全变了"。这条规则让 git 站在 LF 这边。
-* text=auto eol=lf
+# 例外：shell 脚本与 .command 必须 LF，且 .command 保留可执行位
+*.sh text eol=lf
+*.command text eol=lf
+*.command -text
 
-# 二进制，别碰
+# 二进制，别做任何转换
 *.png binary
+*.jpg binary
 *.ico binary
 *.icns binary
 *.pyc binary
-
-# Shell 脚本强制 LF
-*.sh text eol=lf
-*.command text eol=lf
-
-# .command 保留可执行位
-*.command -text
+*.zip binary
