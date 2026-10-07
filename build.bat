@@ -1,38 +1,50 @@
 @echo off
+setlocal
 cd /d "%~dp0"
-title Zhaoshi Xingyue Studio - Setup
+title Xingyue Studio - Setup
 
-set "PY=C:\Users\Administrator\.workbuddy\binaries\python\versions\3.13.12\python.exe"
-set "VENV=%~dp0.venv"
+rem ===================================================================
+rem  One-time environment setup (GUI + CLI share the same .venv).
+rem  Interpreter detection and dependency install both live in
+rem  launcher.py, so this file stays a thin wrapper.
+rem ===================================================================
+set "BOOT="
+where py >nul 2>nul && set "BOOT=py -3"
+if not defined BOOT (
+  where python >nul 2>nul && set "BOOT=python"
+)
+if not defined BOOT (
+  echo.
+  echo [ERROR] Python not found on PATH.
+  echo   Install from https://www.python.org/downloads/
+  echo   and tick "tcl/tk and IDLE" plus "Add python.exe to PATH".
+  echo.
+  pause
+  exit /b 1
+)
 
 echo ============================================
-echo   Setup CLI environment
+echo   Step 1/2  Prepare environment (.venv)
 echo ============================================
-echo.
-
-if not exist "%VENV%" goto :mkvenv
-goto :installdeps
-
-:mkvenv
-echo [1/3] Creating virtual environment...
-"%PY%" -m venv "%VENV%"
-goto :installdeps
-
-:installdeps
-echo [2/3] Installing dependencies...
-"%VENV%\Scripts\python.exe" -m pip install --upgrade pip -q
-"%VENV%\Scripts\python.exe" -m pip install -r "%~dp0requirements.txt"
-
-echo [3/3] Detecting browsers...
-"%VENV%\Scripts\python.exe" "%~dp0main.py" browsers
+%BOOT% "%~dp0launcher.py" --setup
+if errorlevel 1 (
+  echo [ERROR] Environment setup failed.
+  pause
+  exit /b 1
+)
 
 echo.
 echo ============================================
-echo  Done. Next steps:
-echo    login : .venv\Scripts\python.exe main.py login
-echo    studio: .venv\Scripts\python.exe main.py studio
-echo    help  : .venv\Scripts\python.exe main.py
+echo   Step 2/2  Detect browsers
+echo ============================================
+"%~dp0.venv\Scripts\python.exe" "%~dp0main.py" browsers
+
 echo.
-echo  For the GUI, run start.bat instead.
+echo ============================================
+echo  Done.
+echo    GUI  : double-click  qi-dong.bat  (Chinese file name)
+echo    CLI  : .venv\Scripts\python.exe main.py studio
+echo    Help : .venv\Scripts\python.exe main.py
 echo ============================================
 pause
+exit /b 0

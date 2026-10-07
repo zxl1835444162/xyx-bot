@@ -1,32 +1,28 @@
 @echo off
+setlocal
 cd /d "%~dp0"
-title Zhaoshi Xingyue Studio
+title Xingyue Studio
 
-set "VENV312=%~dp0.venv312\Scripts\python.exe"
-set "VENVMAIN=%~dp0.venv\Scripts\python.exe"
-set "SYSPY=C:\Python312\python.exe"
+rem ===================================================================
+rem  Boot interpreter only. Everything else (venv, deps, which Python
+rem  actually runs the app) is decided by launcher.py -- one single
+rem  source of truth, cross-platform, no hard-coded machine paths.
+rem ===================================================================
+set "BOOT="
+where py >nul 2>nul && set "BOOT=py -3"
+if not defined BOOT (
+  where python >nul 2>nul && set "BOOT=python"
+)
+if not defined BOOT (
+  echo.
+  echo [ERROR] Python not found on PATH.
+  echo   Install from https://www.python.org/downloads/
+  echo   and tick "tcl/tk and IDLE" plus "Add python.exe to PATH".
+  echo.
+  pause
+  exit /b 1
+)
 
-echo ============================================
-echo   Zhaoshi Group . Xingyue Studio
-echo ============================================
-echo.
-
-if exist "%VENV312%" goto :run312
-if exist "%SYSPY%" goto :mkgui
-
-echo [ERROR] No usable Python found.
-echo Please install Python 3.12 from python.org
-pause
-exit /b 1
-
-:mkgui
-echo [SETUP] Creating GUI environment with system Python...
-"%SYSPY%" -m venv "%~dp0.venv312"
-"%VENV312%" -m pip install -r "%~dp0requirements-gui.txt" -q
-goto :run312
-
-:run312
-echo [RUN] %VENV312%
-"%VENV312%" "%~dp0run_gui.py"
+%BOOT% "%~dp0launcher.py" %*
 if errorlevel 1 pause
 exit /b 0

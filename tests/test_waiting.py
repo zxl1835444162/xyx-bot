@@ -19,6 +19,8 @@ import time
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+import _support  # noqa: E402  文件布局的唯一接口（见 tests/_support.py）
+
 # ★ 输出被重定向到文件/管道时，Windows 会用 GBK，日志里的 ⚠ 会让
 #   print 直接抛 UnicodeEncodeError（实测退出码 1）。先加固编码。
 try:
@@ -384,7 +386,8 @@ for _tf in ("test_fixes.py", "test_gui_pages.py", "test_waiting.py"):
 # 实测代价：`wait_until(gen_finished, timeout=300)` 让**每章干等满 300 秒**
 #           才判"生成失败"，而生成其实 ~9 秒就完成了。
 #           `wait_until(review_pane_open, ...)` 同理，每章白等 8.5 秒。
-import audit_wait_args  # noqa: E402  （仓库根目录下的审计工具）
+_support.add_tools_to_path()   # 审计工具已从仓库根搬到 tools/audit/，由 _support 定位
+import audit_wait_args  # noqa: E402  （tools/audit/audit_wait_args.py）
 
 _n_files, _probs = audit_wait_args.audit_all(ROOT)
 check_true(f"全项目 {_n_files} 个文件的 wait_until/wait_gone 谓词签名都正确"

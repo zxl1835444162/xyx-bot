@@ -679,11 +679,11 @@ def cmd_diag() -> None:
 
     from src import config as C
 
-    # ★ 打包（.app / .exe）之后，diag_login.py 这个开发脚本没被打进去，
-    #   直接 run_path 会报 FileNotFoundError。这里先说清楚。
-    script = C.ROOT / "diag_login.py"
+    # ★ 打包（.app / .exe）之后，开发期脚本没被打进去，直接 run_path 会报
+    #   FileNotFoundError。这里先说清楚。
+    script = C.ROOT / "tools" / "diag" / "diag_login.py"
     if not script.exists():
-        print("diag 是开发期脚本（diag_login.py），打包版里没有它。")
+        print("diag 是开发期脚本（tools/diag/diag_login.py），打包版里没有它。")
         print("请改用：python main.py session   查看登录态详情")
         sys.exit(2)
 

@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "xyxbot"
+version = "1.0.0"
+description = "星月创作台（xyx-bot）：Playwright 驱动的续写 / 审稿 / 发布流水线，带 tkinter 深色界面"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "Proprietary" }
+authors = [{ name = "Zhaoshi Group" }]
+keywords = ["playwright", "automation", "novel", "tkinter", "xingyuexiezuo"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Environment :: Win32 (MS Windows)",
+  "Environment :: MacOS X",
+  "Topic :: Desktop Environment",
+]
+
+# 运行期依赖：只这两条，别的都是标准库（见 docs/AUDIT.md 的依赖健康一节）
+dependencies = ["playwright>=1.47.0"]
+
+[project.optional-dependencies]
+# 图形界面还需要 Pillow（截图工具 ui/shot.py 与图标生成 scripts/make_icons.py 用）
+gui = ["Pillow>=10.0"]
+# CI 里额外装的（工作流脚本用到）
+ci = ["PyYAML"]
+
+[project.urls]
+Repository = "https://github.com/zxl1835444162/xyx-bot"
+
+[tool.setuptools]
+# 单一包：业务在 xyxbot/，界面在 xyxbot/ui/
+packages = ["xyxbot", "xyxbot.ui", "xyxbot.ui.pages", "xyxbot.platforms", "xyxbot.tasks"]
+
+[tool.setuptools.package-data]
+xyxbot = ["py.typed"]
