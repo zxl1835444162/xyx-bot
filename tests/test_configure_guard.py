@@ -108,7 +108,7 @@ for p in UI_FILES:
             raw_binds.append((rel, node.lineno, _enclosing_func(tree, node.lineno)))
 
 outside = [f"{rel}:{ln}({fn})" for rel, ln, fn in raw_binds
-           if not (rel == "ui/theme.py" and fn == "bind_configure")]
+           if not (rel.startswith("ui/theme") and fn == "bind_configure")]
 check(f"★ 全 ui/ 只有 bind_configure 内部一处裸绑（其余都走守卫）"
       f"（{outside}）", len(outside), 0)
 _allowed = [f"{rel}:{ln}({fn})" for rel, ln, fn in raw_binds

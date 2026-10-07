@@ -1,557 +1,19 @@
-"""深色主题与自绘组件库。
+"""控件类（Card / BrandButton / DarkEntry / LogView …）。
 
-tkinter 原生 ttk 控件无法做圆角、渐变、阴影，因此这里用 Canvas 自绘一套，
-以获得现代质感。所有颜色集中在本文件，改主题只需改 COLOR 字典。
+本文件由原巨型模块拆分而来（Phase C2/C1），拆分时按 AST 依赖做了拓扑排序，
+每个模块只 import 排在自己前面的模块，不存在循环引用。
 """
 
 from __future__ import annotations
 
-import os
-import sys
-import time
-import tkinter as tk
-from tkinter import font as tkfont
 from typing import Callable, Optional
+import tkinter as tk
 
-# ---------------------------------------------------------------- 配色
+from xyxbot.ui.theme.fonts import F, FM
+from xyxbot.ui.theme.palette import COLOR, GRADIENT_BRAND, LEVEL_COLOR, _lerp_color, round_rect
+from xyxbot.ui.theme.redraw import bind_configure
 
-COLOR = {
-    # 背景层次（由深到浅）
-    "bg_root": "#0d1117",        # 最底层
-    "bg_card": "#161b22",        # 卡片
-    "bg_card_hi": "#1c2128",     # 卡片悬浮
-    "bg_input": "#21262d",       # 输入框
-    "bg_titlebar": "#010409",    # 标题栏
-
-    # 品牌色（金色系，配「赵氏集团」的尊贵感）
-    "brand": "#d4a24c",
-    "brand_hi": "#e8bb6b",
-    "brand_dim": "#8a6a2f",
-
-    # 语义色
-    "accent": "#58a6ff",         # 信息蓝
-    "success": "#3fb950",        # 成功绿
-    "warning": "#d29922",        # 警告黄
-    "danger": "#f85149",         # 危险红
-
-    # 文字
-    "text": "#e6edf3",           # 主文字
-    "text_dim": "#8b949e",       # 次要文字
-    "text_mute": "#6e7681",      # 弱化文字
-    "text_on_brand": "#1a1206",  # 品牌色上的文字
-
-    # 描边
-    "border": "#30363d",
-    "border_hi": "#484f58",
-}
-
-# 渐变用的品牌色序列（标题栏左→右）
-GRADIENT_BRAND = ["#1a1206", "#2b1f0a", "#3d2a0d", "#2b1f0a", "#1a1206"]
-
-# 日志级别颜色
-LEVEL_COLOR = {
-    "info": COLOR["text_dim"],
-    "ok": COLOR["success"],
-    "warn": COLOR["warning"],
-    "err": COLOR["danger"],
-    "brand": COLOR["brand"],
-}
-
-
-# ---------------------------------------------------------------- 字体
-#
-# ★★ 跨平台（2026-10-04 转 macOS）
-#   原来写死 "Microsoft YaHei UI"。这个字体在 macOS 上**不存在**，
-#   Tk 会默默回退到默认字体 —— 中文可能变成极细字重，或者出现方块。
-#   现在按平台列**优先级候选**，并用 `tkfont.families()` 挑第一个真的装了
-#   的；一个都挑不到就把第一个候选交给 Tk 自己回退（不会再弄丢中文）。
-#
-#   两条纪律：
-#     ① 系统字体表**只枚举一次**并缓存（见 `_system_families`）
-#     ② 解析结果**无论成功失败都要缓存** —— 这两条是 2026-10-04 修的一个
-#        真 bug：macOS 上"点击登录后鼠标一直转圈、主界面永远不出来"。
-#        原因见 `_system_families` 的说明。
-#
-#     ③ 允许用环境变量 `XYX_UI_FONT` / `XYX_MONO_FONT` 强制覆盖。
-#
-# ★★ 为什么要列**中文名**候选（2026-10-04）
-#    macOS 会按系统语言把字体族名**本地化**：系统是中文时，
-#    `tkfont.families()` 返回的可能是「苹方-简」而不是「PingFang SC」。
-#    而英文环境的 CI runner 返回的是英文名。这就解释了
-#    "同一个包在 CI 上一秒过、在用户中文 Mac 上卡死"。
-#    所以两种写法都列上。
-
-UI_FONT_CANDIDATES = {
-    "darwin": ["PingFang SC", "苹方-简", "苹方",
-               "Hiragino Sans GB", "冬青黑体简体中文",
-               "Heiti SC", "黑体-简", "STHeiti",
-               "Songti SC", "宋体-简", "STSong",
-               "Arial Unicode MS"],
-    "win32": ["Microsoft YaHei UI", "Microsoft YaHei", "SimHei",
-              "SimSun", "Segoe UI"],
-    "linux": ["Noto Sans CJK SC", "Source Han Sans SC",
-              "WenQuanYi Micro Hei", "DejaVu Sans"],
-}
-MONO_FONT_CANDIDATES = {
-    "darwin": ["Menlo", "Monaco", "SF Mono", "等宽", "Courier New"],
-    "win32": ["Consolas", "Cascadia Mono", "Courier New"],
-    "linux": ["DejaVu Sans Mono", "Noto Sans Mono", "Liberation Mono"],
-}
-
-#: 万一一堆候选都没命中，就按这些**关键字**在系统字体里捞一个中文字体
-#: （本地化名字千奇百怪，列不完，兜一层关键字匹配）
-_CJK_HINTS = ("pingfang", "hiragino", "heiti", "songti", "kaiti",
-              "苹方", "黑体", "宋体", "楷体", "冬青", "华文", "雅黑")
-
-
-# ---------------------------------------------------------------- ★ 字号缩放
-#
-# ★★★ 用户反馈（2026-10-04）：在 Mac 上「字体太小」。
-#
-#   原因不是字体选错了（PingFang SC 是对的），而是**同一套 point 字号
-#   在不同平台上视觉大小差很多**：
-#     * Tk 的字号是 **point**（1pt = 1/72 inch），真机上是按 DPI 换算的
-#     * Windows 上 Tk 默认 tk scaling ≈ 1.33（96 DPI），9pt 看着刚刚好
-#     * macOS 上同一份代码渲染出来的字明显**更小更细**，尤其 8~10pt 这种小号，
-#       在 Retina 屏上会显得发虚、偏小
-#   界面里 8/9/10pt 的字号占了绝大多数（49 处 9pt、14 处 10pt、10 处 8pt），
-#   所以整体观感就是"字体太小"。
-#
-#   解决方式：**集中一处做平台缩放**，不去改 78 处调用点。
-#     * macOS × 1.3 —— 这是反复对比后比较接近 Windows 观感的系数
-#     * 其余平台 × 1.0 —— 完全不动，避免把 Windows/Linux 的效果改坏
-#   并且允许用环境变量 `XYX_FONT_SCALE` 覆盖（用户/CI 可微调）。
-#
-#   ★ 向上取整到 0.5 的整数倍，避免出现 11.7pt 这种怪值（Tk 接受浮点，
-#     但取整后跨平台的字体缓存更稳定）。
-_FONT_SCALE_BY_PLATFORM = {
-    "darwin": 1.3,
-    "win32": 1.0,
-    "linux": 1.0,
-}
-
-
-def font_scale() -> float:
-    """当前平台的字号缩放系数（可用 `XYX_FONT_SCALE` 覆盖）。"""
-    override = os.environ.get("XYX_FONT_SCALE", "").strip()
-    if override:
-        try:
-            v = float(override)
-            if 0.5 <= v <= 3.0:
-                return v
-        except ValueError:
-            pass
-    return _FONT_SCALE_BY_PLATFORM.get(_platform_key(), 1.0)
-
-
-def _scale_size(size: int) -> int:
-    """把设计字号换算成当前平台的实际字号（至少保证 1pt）。"""
-    s = font_scale()
-    if s == 1.0:
-        return int(size)
-    # 放大后向上取整到 0.5 的整数倍，避免奇怪的零头
-    scaled = size * s
-    return max(1, int(scaled + 0.5))
-
-
-
-# ---------------------------------------------------------------- ★ Configure 守卫
-#
-# ★★★ 这里修的是 macOS 上「点登录后鼠标转圈、主界面永远不出来」的**直接原因**
-# =====================================================================
-#
-# 实测（GitHub 的 macOS runner，真机，tests/repro_login.py 带计数器版本）：
-#
-#     ★ 卡死了：主线程已 10.3 秒没有任何进展
-#        最后一次进展：MainWindow.__init__ 结束      ← 主窗**已经建好了**
-#        ★ 计数：Configure=97968  render=98029  create_text=126038
-#
-# 10 秒内 `<Configure>` 触发 **9.8 万次**、重绘 **9.8 万次**、
-# `create_text` **12.6 万次** —— 每秒约一万次。主线程全耗在这个循环里，
-# **永远回不到事件循环**，于是 `after` 定时器不触发、窗口不绘制、
-# 鼠标一直转圈。同一份代码在 Windows 上全程只有 32 次 Configure。
-#
-# 原因：在 `<Configure>` 回调里 delete + 重建画布内容（或在里面
-# `place_configure` 子控件），会**再触发一次 `<Configure>`**。
-# macOS 的 Tk 每次重绘都会再发一个 Configure，于是：
-#
-#     Configure → 重绘 → Configure → 重绘 → …（无限）
-#
-# 破法：**尺寸没变就不重绘**。再配一个全局速率上限兜底 ——
-# 万一将来又造出别的循环，界面最多降到约 6 帧/秒，绝不会被拖死。
-
-_REDRAW_BUDGET = {"t0": 0.0, "n": 0}
-_REDRAW_PER_SEC = 400          # 全局每秒重绘上限（正常界面远低于这个数）
-
-
-def _redraw_allowed() -> bool:
-    """全局重绘闸门：每秒超过 `_REDRAW_PER_SEC` 次就返回 False。"""
-    now = time.time()
-    if now - _REDRAW_BUDGET["t0"] >= 1.0:
-        _REDRAW_BUDGET["t0"] = now
-        _REDRAW_BUDGET["n"] = 0
-    _REDRAW_BUDGET["n"] += 1
-    return _REDRAW_BUDGET["n"] <= _REDRAW_PER_SEC
-
-
-def bind_configure(widget, redraw) -> None:
-    """把 `<Configure>` 绑成**带守卫的重绘**。新代码请一律用它。
-
-    ★ 为什么不能直接 `widget.bind("<Configure>", redraw)`：见上面那段实测数据。
-
-    守卫做两件事：
-      ① **尺寸和上次一样 → 直接返回**（这一条破掉实测到的死循环）；
-      ② 全局每秒重绘上限（`_redraw_allowed`）。超了就合并成一次延时重绘，
-         保证最终画对，但不会把主线程占死。
-
-    重绘回调里要读尺寸就读 `widget._cfg_w` / `widget._cfg_h`
-    （由本函数写入），别再去接 event —— 这样回调可以是零参数的。
-
-    Args:
-        widget: 要绑定的控件
-        redraw: 零参数可调用对象
-    """
-    def _on_cfg(event):
-        size = (event.width, event.height)
-        if getattr(widget, "_cfg_last", None) == size:
-            return                              # ★ 尺寸没变 → 不重绘（破循环）
-        widget._cfg_last = size
-        widget._cfg_w, widget._cfg_h = size
-        if not _redraw_allowed():
-            # 超预算：合并成一次延时重绘（保证最终画对，但不占死主线程）
-            if not getattr(widget, "_cfg_pending", False):
-                widget._cfg_pending = True
-
-                def _late():
-                    widget._cfg_pending = False
-                    try:
-                        redraw()
-                    except Exception:
-                        pass
-
-                try:
-                    widget.after(150, _late)
-                except Exception:
-                    pass
-            return
-        try:
-            redraw()
-        except Exception:
-            # 重绘出错不能把事件循环带走（否则又变成"卡住没反应"）
-            import traceback as _tb
-
-            print("[ui] Configure 重绘失败：\n" + _tb.format_exc(),
-                  file=sys.stderr)
-
-    widget.bind("<Configure>", _on_cfg)
-
-_FONT_CACHE: dict = {}
-#: 系统字体表：**小写名 → 原始名**。None = 还没枚举过；{} = 枚举过但失败
-#:   ★ 必须留原始名：Tk 认的是原始大小写，把 'PingFang SC' 写成
-#:     'pingfang sc' 会找不到字体（等于白挑）。
-_SYS_FAMILIES: dict | None = None
-#: 诊断用：枚举耗时、命中情况
-_FONT_DIAG: dict = {}
-
-
-def _platform_key() -> str:
-    """darwin / win32 / linux（只关心这三类）。"""
-    if sys.platform == "darwin":
-        return "darwin"
-    if sys.platform.startswith("win"):
-        return "win32"
-    return "linux"
-
-
-def _system_families() -> tuple:
-    """系统字体族名（小写 → 原始名）。返回 `(表, 是否已定稿)`。
-
-    ★★ 这里是 2026-10-04 那个"点登录后鼠标一直转圈"的**根因**
-    =====================================================================
-
-    用户反馈（macOS 15）：登录界面正常，**点确定之后登录窗消失、鼠标变成
-    转圈的等待光标、主界面永远不出来、也没有任何报错**。
-    转圈 = 主线程被**卡住**（不是崩溃，所以没有异常、没有弹窗）。
-
-    原因：`tkfont.families()` 在 macOS 上要走 CoreText 枚举**全部系统字体**，
-    很慢。而原来的 `_resolve_family` 只有"**候选字体命中**"才写缓存：
-
-        for name in candidates:
-            if name.lower() in have:
-                _FONT_CACHE[key] = name     # ← 只有命中才缓存
-                return name
-        return candidates[0]                # ← 没命中就直接返回，不缓存！
-
-    于是，只要候选一个都没命中，**每一次** `F()` / `FM()` 都会重新枚举一遍
-    系统字体。而构建主界面会调用 F()/FM() **几百次**（每个标签、按钮、
-    输入框、画布文字都要），几百次 × 每次几十到几百毫秒 = **主线程卡死
-    几分钟**。
-
-    为什么登录界面没事？它控件少，只有几十次调用，几秒内就画完了。
-    这正好解释了"登录界面可以、主界面不行"。
-
-    那为什么 CI 上一秒就过？因为 macOS 会按**系统语言**本地化字体族名：
-    CI runner 是英文环境，返回 "PingFang SC"，第一个候选就命中 → 只枚举
-    一次；用户的中文 Mac 返回的可能是「苹方-简」，ASCII 候选全部落空 →
-    每次都重新枚举。所以这个 bug 只在中文 Mac 上炸。
-
-    修法：
-      ① 枚举结果**缓存**，成功与否都算数；
-      ② 但要区分"还没有 Tk root"和"真的有异常"——
-         没有 root 时 `families()` 是**立刻抛错**的（根本不会走 CoreText），
-         重试几乎不花钱，所以**不缓存**，等 root 建好后正经解析一次；
-         有 root 还失败才是真异常，缓存下来别反复试。
-    """
-    global _SYS_FAMILIES
-    if _SYS_FAMILIES is not None:
-        return _SYS_FAMILIES, True        # 已经定稿
-
-    has_root = getattr(tk, "_default_root", None) is not None
-    t0 = time.time()
-    table: dict = {}
-    try:
-        for f in tkfont.families():
-            s = str(f)
-            # 同名不同大小写只留第一个，值一定是**原始名**
-            table.setdefault(s.lower(), s)
-    except Exception:
-        if not has_root:
-            # 还没有 Tk root：这种失败是**瞬时**的（不会枚举系统字体），
-            # 所以不缓存 —— 等 root 建好后再正经解析一次。
-            _FONT_DIAG["families_ms"] = round((time.time() - t0) * 1000)
-            _FONT_DIAG["deferred_no_root"] = True
-            return {}, False
-        # 有 root 仍失败 → 真异常，缓存空表，别每次重试（那才是贵的）
-        table = {}
-
-    _SYS_FAMILIES = table
-    _FONT_DIAG["families_ms"] = round((time.time() - t0) * 1000)
-    _FONT_DIAG["families_count"] = len(table)
-    return _SYS_FAMILIES, True
-
-
-def _resolve_family(candidates: list, env_var: str) -> str:
-    """从候选里挑一个当前系统真的有的字体名。**结果一定进缓存**。"""
-    forced = (os.getenv(env_var) or "").strip()
-    if forced:
-        return forced
-    key = tuple(candidates)
-    if key in _FONT_CACHE:            # ★ 命中就用 —— 包括"没匹配上"的结果
-        return _FONT_CACHE[key]
-
-    have, final = _system_families()
-    pick = None
-    if have:
-        for name in candidates:
-            real = have.get(name.lower())
-            if real:
-                pick = real            # ★ 用系统里的原始名，别用候选的写法
-                break
-        if pick is None:
-            # 候选都落空（多半是本地化名字）→ 按关键字在系统字体里捞一个
-            for hint in _CJK_HINTS:
-                for low, real in have.items():
-                    if hint in low:
-                        pick = real
-                        break
-                if pick:
-                    break
-    result = pick or (candidates[0] if candidates else "TkDefaultFont")
-    if final:                             # ★ 定稿了才缓存，避免毒化缓存
-        _FONT_CACHE[key] = result
-        _FONT_DIAG.setdefault("matched", {})[key] = pick is not None
-    return result
-
-
-def font_report() -> dict:
-    """诊断信息：挑到了什么字体、系统有多少字体、枚举花了多久、有没有命中。
-
-    给 `--selftest` 用 —— 中文 Mac 上的字体问题一眼就能看出来。
-
-    ★ `tkfont.families()` 需要存在一个 Tk root 才能拿到真表；没有就临时
-      建一个再销毁（否则报告出来的全是 "?" / None，等于没报）。
-    """
-    # ★ 建 root 与解析要分成两步：建不出 root（Linux 无 DISPLAY / headless）
-    #   时，解析仍应尝试并如实报告"未定稿"，而不是整块跳过、什么都不报。
-    tmp = None
-    try:
-        if getattr(tk, "_default_root", None) is None:
-            tmp = tk.Tk()
-            tmp.withdraw()
-    except Exception:
-        tmp = None
-    try:
-        F()
-        FM()
-    except Exception:
-        pass
-    finally:
-        if tmp is not None:
-            try:
-                tmp.destroy()
-            except Exception:
-                pass
-
-    plat = _platform_key()
-    k_ui = tuple(UI_FONT_CANDIDATES[plat])
-    k_mono = tuple(MONO_FONT_CANDIDATES[plat])
-    matched = _FONT_DIAG.get("matched", {})
-    return {
-        "ui": _FONT_CACHE.get(k_ui, "?"),
-        "ui_matched": matched.get(k_ui),
-        "mono": _FONT_CACHE.get(k_mono, "?"),
-        "mono_matched": matched.get(k_mono),
-        "platform": plat,
-        "system_family_count": _FONT_DIAG.get("families_count"),
-        "families_ms": _FONT_DIAG.get("families_ms"),
-        "deferred_no_root": _FONT_DIAG.get("deferred_no_root", False),
-        "picked": _FONT_DIAG.get("picked", {}),
-    }
-
-
-def F(size: int = 10, bold: bool = False) -> tuple:
-    """统一界面字体（按平台挑得到的最合适的中文字体）。
-
-    ★ 字号会按平台做缩放（macOS 放大，见 `font_scale`）——调用方
-    照旧写设计字号即可，不用关心平台差异。
-    """
-    fam = _resolve_family(UI_FONT_CANDIDATES[_platform_key()], "XYX_UI_FONT")
-    return (fam, _scale_size(size), "bold" if bold else "normal")
-
-
-def FM(size: int = 10) -> tuple:
-    """等宽字体，用于日志。
-
-    ★ 同样做平台字号缩放；另外等宽字体在 macOS 上偏小，缩放后更易读。
-    """
-    fam = _resolve_family(MONO_FONT_CANDIDATES[_platform_key()],
-                          "XYX_MONO_FONT")
-    return (fam, _scale_size(size), "normal")
-
-
-# ---------------------------------------------------------------- ★ 滚轮
-#
-# ★★★ 用户反馈（2026-10-04）：在 Mac 上「只能拖动滑动条，滚轮滚不动」。
-#
-#   根因：所有滚动点的代码都写成
-#       self._canvas.yview_scroll(int(-event.delta / 120), "units")
-#   这个 **`/ 120` 是 Windows 的量纲**：
-#     * Windows：`event.delta` 是 ±120 的整数倍（一格 = 120）→ 120/120 = 1 ✓
-#     * macOS ：`event.delta` 是**很小的整数**（滚轮 ±1，触控板常常只有 ±1）
-#                → int(1/120) = **0** ⇒ 滚动量恒为 0，**怎么滚都不动** ✗
-#     * Linux ：Tk 根本不发 `<MouseWheel>`，要用 `<Button-4>`/`<Button-5>` ✗
-#
-#   修法：集中到这一个函数，按平台给**步长**，并顺手支持 Linux 的按钮事件。
-#   调用方只需把原来的 `yview_scroll(int(-event.delta / 120), "units")`
-#   换成 `wheel_units(event)` 即可。
-
-#: 每个滚轮 notch 滚多少个 "units"（unit = 一行）。macOS 的 delta 小而密，
-#: 所以给大一点的步长，手感才跟 Windows 接近。
-_WHEEL_STEP = {
-    "darwin": 1,      # macOS：delta 已经是 ±1 量级，1 格滚 1 行手感正常
-    "win32": 3,       # Windows：一格 delta=120，滚 3 行（原逻辑约等于 1，略加大）
-    "linux": 3,       # Linux：Button-4/5 一次一行，滚 3 行
-}
-
-
-def wheel_units(event) -> int:
-    """把滚轮事件换算成「滚几行」（正数向下滚，负数向上滚）。
-
-    跨平台统一入口：
-      * Windows：按 `event.delta / 120` 取格数
-      * macOS  ：`event.delta` 本身就是格数（常为 ±1），**不能再除 120**
-      * Linux  ：用 `<Button-4>`/`<Button-5>` 事件，`event.num` 区分方向
-
-    返回值可直接喂给 `canvas.yview_scroll(n, "units")`。
-    """
-    # ---- Linux：Button-4 上滚 / Button-5 下滚 ----
-    num = getattr(event, "num", None)
-    if num == 4:
-        return -_WHEEL_STEP.get("linux", 3)
-    if num == 5:
-        return _WHEEL_STEP.get("linux", 3)
-
-    delta = getattr(event, "delta", 0) or 0
-    plat = _platform_key()
-
-    if plat == "darwin":
-        # macOS：delta 通常是很小的整数（滚轮 ±1，触控板常常只有 ±1），
-        # 也有个别 Tk 版本给 120 量级 —— 两种都兼容：
-        #   * |delta| 很小 → 按**符号**滚一步（不依赖数值大小，最稳）
-        #   * |delta| 是 120 的倍数 → 按 Windows 方式算格数
-        # ★ 方向与 Windows 一致：delta 为正表示**向上**滚 → 返回负数。
-        if delta == 0:
-            return 0
-        step = _WHEEL_STEP.get("darwin", 1)
-        if abs(delta) >= 120:
-            notches = max(1, abs(delta) // 120)
-            return -notches * step if delta > 0 else notches * step
-        return -step if delta > 0 else step
-
-    # Windows / 其它：标准 120 步进
-    if delta == 0:
-        return 0
-    notches = int(delta / 120)
-    if notches == 0:
-        # 有些高精度设备（部分外设/驱动）用更小的 delta，兜一层符号
-        notches = 1 if delta > 0 else -1
-    return -notches * _WHEEL_STEP.get("win32", 3)
-
-
-def bind_wheel(widget, handler) -> None:
-    """把一个「按行滚动」的处理函数绑到控件上，跨平台生效。
-
-    * Windows / macOS → `<MouseWheel>`
-    * Linux（X11）     → `<Button-4>` / `<Button-5>`
-
-    `handler` 收到的是原始 event，内部请用 :func:`wheel_units` 换算步长。
-    """
-    widget.bind("<MouseWheel>", handler, add="+")
-    widget.bind("<Button-4>", handler, add="+")
-    widget.bind("<Button-5>", handler, add="+")
-
-
-def bind_wheel_all(widget, handler) -> None:
-    """:func:`bind_wheel` 的 `bind_all` 版（全局滚轮）。"""
-    widget.bind_all("<MouseWheel>", handler)
-    widget.bind_all("<Button-4>", handler)
-    widget.bind_all("<Button-5>", handler)
-
-
-def unbind_wheel_all(widget) -> None:
-    """:func:`bind_wheel_all` 的对应解绑。"""
-    for seq in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
-        try:
-            widget.unbind_all(seq)
-        except Exception:
-            pass
-
-
-# ---------------------------------------------------------------- 工具
-
-def _lerp_color(c1: str, c2: str, t: float) -> str:
-    """两色线性插值，用于渐变。"""
-    def h2r(c):
-        c = c.lstrip("#")
-        return int(c[0:2], 16), int(c[2:4], 16), int(c[4:6], 16)
-
-    r1, g1, b1 = h2r(c1)
-    r2, g2, b2 = h2r(c2)
-    r = int(r1 + (r2 - r1) * t)
-    g = int(g1 + (g2 - g1) * t)
-    b = int(b1 + (b2 - b1) * t)
-    return f"#{r:02x}{g:02x}{b:02x}"
-
-
-def round_rect(canvas: tk.Canvas, x1, y1, x2, y2, r: int = 12, **kw):
-    """在 Canvas 上画圆角矩形（用多边形近似）。"""
-    pts = [
-        x1 + r, y1, x2 - r, y1, x2, y1, x2, y1 + r,
-        x2, y2 - r, x2, y2, x2 - r, y2,
-        x1 + r, y2, x1, y2, x1, y2 - r,
-        x1, y1 + r, x1, y1,
-    ]
-    return canvas.create_polygon(pts, smooth=True, **kw)
+__all__ = ["BrandButton", "Card", "CheckBox", "Collapsible", "DarkEntry", "DimLabel", "GradientBar", "LogView", "StatusBar", "TitleLabel", "Toast"]
 
 
 # ---------------------------------------------------------------- 组件
@@ -643,6 +105,7 @@ class Card(tk.Frame):
         self._resize_win()
 
 
+
 class TitleLabel(tk.Label):
     def __init__(self, master, text: str, size: int = 12, color=None, **kw):
         super().__init__(
@@ -650,6 +113,7 @@ class TitleLabel(tk.Label):
             bg=kw.pop("bg", COLOR["bg_card"]),
             fg=color or COLOR["text"], **kw,
         )
+
 
 
 class Collapsible(tk.Frame):
@@ -720,6 +184,7 @@ class Collapsible(tk.Frame):
         return self._open
 
 
+
 class DimLabel(tk.Label):
     def __init__(self, master, text: str, size: int = 9, **kw):
         super().__init__(
@@ -727,6 +192,7 @@ class DimLabel(tk.Label):
             bg=kw.pop("bg", COLOR["bg_card"]),
             fg=kw.pop("fg", COLOR["text_dim"]), **kw,
         )
+
 
 
 class GradientBar(tk.Canvas):
@@ -755,6 +221,7 @@ class GradientBar(tk.Canvas):
             col = _lerp_color(self._colors[idx], self._colors[idx + 1], local_t)
             self.create_rectangle(x, 0, x + step, h, fill=col, outline="", tags="grad")
         self.tag_lower("grad")
+
 
 
 class BrandButton(tk.Canvas):
@@ -893,6 +360,7 @@ class BrandButton(tk.Canvas):
     def set_text(self, text: str):
         self._text = text
         self._render()
+
 
 
 class DarkEntry(tk.Frame):
@@ -1045,6 +513,7 @@ class DarkEntry(tk.Frame):
         self.entry.focus_set()
 
 
+
 class LogView(tk.Frame):
     """带等级着色的日志区，支持「只看关键节点」。
 
@@ -1138,6 +607,7 @@ class LogView(tk.Frame):
         return self.key_only()
 
 
+
 class StatusBar(tk.Canvas):
     """底部状态栏：左侧状态点 + 文字，右侧版本号。"""
 
@@ -1168,6 +638,7 @@ class StatusBar(tk.Canvas):
         if self._version:
             self.create_text(w - 14, h / 2, anchor="e", text=self._version,
                              font=F(8), fill=COLOR["text_mute"])
+
 
 
 class CheckBox(tk.Canvas):
@@ -1242,6 +713,7 @@ class CheckBox(tk.Canvas):
     def set(self, on: bool):
         self._checked = bool(on)
         self._render()
+
 
 
 class Toast(tk.Frame):

@@ -91,17 +91,23 @@ __all__ = [
     *_all_11,
 ]
 
-# ★ 会被重新赋值的模块级状态（例如 LAST_DECISION）：不能靠上面的 star-import
-#   暴露 —— 那只是导入时的副本，子模块里重新赋值之后这里读到的还是旧值。
-#   用 PEP 562 的模块级 __getattr__ 转发到归属模块，读到的永远是当前值。
+# ★ 会被重新赋值的模块级状态：star-import 只会留下导入时的副本，
+#   子模块里重新赋值后这里读到的还是旧值 → 用模块级 __getattr__ 转发。
 _LIVE_STATE = {"LAST_DECISION": "flows"}
+# 兼容转发：老代码/老测试直接摸 ai.xxx 时，去各子模块里找（拿到的是同一个对象）。
+# 注意：**写**（ai.X = ...）不会转发，要给子模块改状态请直接改子模块。
+_SUB_MODULES = ["selectors", "elements", "dialog", "current", "model", "shortcuts",
+                "relate", "body", "generate", "chapters", "review", "flows"]
 
 
 def __getattr__(name: str):
-    """惰性转发「活」状态（见 _LIVE_STATE）。"""
-    _mod = _LIVE_STATE.get(name)
-    if _mod is None:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
     import importlib
 
-    return getattr(importlib.import_module(f"xyxbot.ai.{_mod}"), name)
+    _mod = _LIVE_STATE.get(name)
+    if _mod is not None:
+        return getattr(importlib.import_module("xyxbot.ai." + _mod), name)
+    for _m in _SUB_MODULES:
+        _sub = importlib.import_module("xyxbot.ai." + _m)
+        if hasattr(_sub, name):
+            return getattr(_sub, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

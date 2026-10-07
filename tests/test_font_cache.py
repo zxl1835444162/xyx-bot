@@ -77,6 +77,9 @@ def check_true(name: str, cond, detail: str = ""):
 
 
 _real_families = tkfont.families
+# 拆包后字体实现住在 theme/fonts.py（theme/_SYS_FAMILIES/_platform_key 都在那里）。
+# 读 theme.xxx 有兼容转发，但**打补丁必须打在归属模块上**才有用。
+from xyxbot.ui.theme import fonts as theme_fonts  # noqa: E402
 
 
 def _fake_fonts(names, calls: list, cost_ms: float = 0.0, boom: bool = False):
@@ -94,7 +97,7 @@ def _fake_fonts(names, calls: list, cost_ms: float = 0.0, boom: bool = False):
 
 def _reset():
     theme._FONT_CACHE.clear()
-    theme._SYS_FAMILIES = None
+    theme_fonts._SYS_FAMILIES = None
     theme._FONT_DIAG.clear()
     os.environ.pop("XYX_UI_FONT", None)
     os.environ.pop("XYX_MONO_FONT", None)
@@ -104,8 +107,8 @@ N = 300          # 模拟"构建主界面时的调用次数"（实际是几百�
 
 # ★ 把平台钉死成 darwin：要测的就是"中文 macOS"这个场景
 #   （否则在 Windows 上跑会用到 win32 的候选表，测不到目标路径）
-_real_platform_key = theme._platform_key
-theme._platform_key = lambda: "darwin"
+_real_platform_key = theme_fonts._platform_key
+theme_fonts._platform_key = lambda: "darwin"
 _UI = theme.UI_FONT_CANDIDATES["darwin"]
 
 try:
@@ -219,7 +222,7 @@ try:
         #   并且没有把空表钉进缓存（否则以后有 root 也不会再解析）。
         check_true("无 root 时如实报告「未定稿」", rep["deferred_no_root"] is True)
         check_true("无 root 时不毒化缓存（_SYS_FAMILIES 仍为 None）",
-                   theme._SYS_FAMILIES is None)
+                   theme_fonts._SYS_FAMILIES is None)
     else:
         check("报告里的系统字体数正确", rep["system_family_count"], 2)
         check_true("报告里说清了有没有命中候选（便于远程排查）",
@@ -243,7 +246,7 @@ try:
     check_true("有本地化关键字兜底", "_CJK_HINTS" in src)
 finally:
     tkfont.families = _real_families
-    theme._platform_key = _real_platform_key
+    theme_fonts._platform_key = _real_platform_key
 
 print("\n" + "=" * 60)
 print(f"  通过 {len(PASS)} 项，失败 {len(FAIL)} 项")

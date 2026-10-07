@@ -538,22 +538,23 @@ except ImportError:
 # 修法是在 theme 里集中做**平台字号缩放**（macOS ×1.3）。
 # 这里锁住"这个机制必须存在且方向正确"。
 from xyxbot.ui import theme as _theme  # noqa: E402
+from xyxbot.ui.theme import fonts as _theme_fonts  # noqa: E402  平台判定在这里
 
 check_true("theme 暴露 font_scale()", callable(getattr(_theme, "font_scale", None)))
 check_true("theme 暴露 _scale_size()",
            callable(getattr(_theme, "_scale_size", None)))
 if hasattr(_theme, "font_scale"):
-    _orig_key = _theme._platform_key
+    _orig_key = _theme_fonts._platform_key
 
-    _theme._platform_key = lambda: "win32"
+    _theme_fonts._platform_key = lambda: "win32"
     check("Windows 字号不缩放（8→8）", _theme._scale_size(8), 8)
 
-    _theme._platform_key = lambda: "darwin"
+    _theme_fonts._platform_key = lambda: "darwin"
     check_true("macOS 字号被放大（8→>8）", _theme._scale_size(8) > 8,
                f"got {_theme._scale_size(8)}")
     check_true("macOS 小字号放大更明显（9→≥11）", _theme._scale_size(9) >= 11,
                f"got {_theme._scale_size(9)}")
-    _theme._platform_key = _orig_key
+    _theme_fonts._platform_key = _orig_key
 
 # ==================================================== ★ 滚轮跨平台（macOS 滚不动）
 #
@@ -571,26 +572,26 @@ if hasattr(_theme, "wheel_units"):
             self.delta = delta
             self.num = num
 
-    _orig_key = _theme._platform_key
+    _orig_key = _theme_fonts._platform_key
 
-    _theme._platform_key = lambda: "darwin"
+    _theme_fonts._platform_key = lambda: "darwin"
     _d_mac = _theme.wheel_units(_Ev(1))          # macOS 向上滚 delta=+1
     check_true("macOS 滚轮不再恒为 0", _d_mac != 0, f"got {_d_mac}")
     check_true("macOS 向上滚 → 负（与 Win 同向）", _d_mac < 0, f"got {_d_mac}")
     check_true("macOS 向下滚 → 正",
                _theme.wheel_units(_Ev(-1)) > 0)
 
-    _theme._platform_key = lambda: "win32"
+    _theme_fonts._platform_key = lambda: "win32"
     _d_win = _theme.wheel_units(_Ev(120))
     check_true("Windows 向上滚 → 负", _d_win < 0, f"got {_d_win}")
     check_true("Windows 一格 120 → 有步长", _d_win != 0, f"got {_d_win}")
 
-    _theme._platform_key = lambda: "linux"
+    _theme_fonts._platform_key = lambda: "linux"
     check_true("Linux Button-4（上）→ 负",
                _theme.wheel_units(_Ev(0, 4)) < 0)
     check_true("Linux Button-5（下）→ 正",
                _theme.wheel_units(_Ev(0, 5)) > 0)
-    _theme._platform_key = _orig_key
+    _theme_fonts._platform_key = _orig_key
 
 # ★ 代码里不许再有裸的 `/ 120` 量纲 —— 那是 macOS 滚不动的直接原因。
 # ★ 例外：`theme.wheel_units` 自己**必须**用 `/120`（那是 Windows 分支的
@@ -613,7 +614,8 @@ def _code_without_strings(src: str) -> str:
 
 _bad_120 = []
 for _f in S.ui_py_files():
-    if _f.name == "theme.py":
+    # theme 现在是包（theme/scroll.py 才是滚轮量纲的地方），按前缀跳过
+    if S.legacy_rel(_f).startswith("ui/theme"):
         continue
     _code = _code_without_strings(_f.read_text(encoding="utf-8"))
     for _i, _ln in enumerate(_code.splitlines(), 1):
