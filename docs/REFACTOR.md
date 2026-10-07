@@ -183,6 +183,64 @@ shell 脚本与二进制收尾）。用 `git check-attr eol -- <文件>` 逐个�
 > 改完必须 `git status` / `git diff --stat` 看一眼改动规模是否合理 ——
 > 这次的"5907 插入"就是最直接的报警信号。
 
+## Phase B · 包重构（完成）
+
+### B1 `src/` → `xyxbot/`，`ui/` → `xyxbot/ui/`
+
+**为什么值得做**：`src` 是个"垃圾抽屉"名字，而界面与业务是两个平级包、互相 import，
+读者看不出谁是产品。改成一个以产品命名的包（`xyxbot`），界面收进包内 ——
+`import xyxbot.ui.theme` 一眼就知道归属，`python -m xyxbot` 也才顺理成章。
+
+**做法**：`git mv` 两个目录（保留历史），然后按 **6 种形态**重写导入：
+
+```
+from src.X import Y   →  from xyxbot.X import Y        （220 处）
+from src import X     →  from xyxbot import X
+import src.X          →  import xyxbot.X
+from ui.X import Y    →  from xyxbot.ui.X import Y     （ 25 处）
+from ui import X      →  from xyxbot.ui import X
+import ui.X           →  import xyxbot.ui.X
+```
+
+共 **44 个文件、253 行**。另外同步了 7 处配套引用：spec 的 `collect_submodules`、
+CI 里构造信息文件的路径、审计工具的 glob 模式、以及测试里
+"按旧相对路径做键/比较"的 4 处（改走 `_support.legacy_rel()`，历史断言不用重写）。
+
+**过程中修掉两个真问题**：
+
+1. `_support.resolve_legacy()` 里我写了 `lstrip("./")` —— 而 Python 的 `lstrip`
+   收的是**字符集**不是前缀，于是 `.github/workflows/*.yml` 被削成 `github/...`，
+   `test_portability` 两项直接红。改成显式判断前缀。
+2. 界面收进包内后，`_support.all_source_files()` 把 `xyxbot/ui/**` 数了两遍
+   （断言数变成 1016，比基线多 1）→ 用集合去重。
+
+这两条都是**测试立刻抓出来的** —— 这也是为什么每一步都必须跑全量（1015 项）。
+
+**验收**：`tests/run_all.py` → 12/12 用例通过、**1015 项断言全绿（与重构前基线一字不差）**。
+
+### B2 CLI 归位，两种入口等价，版本单一真相源
+
+| 改动 | 说明 |
+|---|---|
+| `main.py` → `xyxbot/cli.py` | 560 行 CLI 从根目录搬进包内 |
+| 根 `main.py` | 变成 10 行薄壳：加 `sys.path` 后转交 `xyxbot.cli.main` |
+| `xyxbot/__main__.py` | 新增，`python -m xyxbot <命令>` 与 `python main.py <命令>` 完全等价 |
+| `xyxbot/version.py` | 新增，版本号**唯一真相源** |
+| `xyxbot/_buildinfo.py` | 改成 `from xyxbot.version import VERSION`；CI 只覆盖 SHA/BUILT_AT（原来 CI 在这里又写死了一次 "1.0.0"） |
+| `pyproject.toml` | 加 `[project.scripts] xyxbot = "xyxbot.cli:main"` |
+
+**验收**
+
+```
+$ python main.py                    # 薄壳 → 列出命令，exit=1（无参数时的约定）
+  可用命令: login, session, prepare, check, diag, selftest, recon, logout,
+           books, open, ai, review, auto, batch, tasks, platforms, run, studio, browsers
+$ python main.py selftest           # exit=0
+$ python -m xyxbot selftest         # exit=0
+$ python -c "from xyxbot import _buildinfo; print(_buildinfo.describe())"
+  v1.0.0 build=dev at=dev
+```
+
 ---
 
 ## 路径对照表（给翻历史文档用）

@@ -135,8 +135,8 @@ xyx-bot-main/
 | Phase 0 | `git init` + 基线提交（安全网） | ✅ 完成 |
 | Phase A | 结构收拢：docs/、tools/、CHANGELOG、pyproject、入口与 venv 合一、统一测试 runner | ✅ 完成 |
 | Phase A2 | **测试与文件布局解耦**（`tests/_support.py` + 21 处迁移，已验收全绿） | ✅ 完成 |
-| Phase B | 包重构：`src`→`xyxbot`、`ui`→`xyxbot/ui` + `python -m xyxbot` + spec/CI/bat 同步 | ⏳ 未开始 |
-| Phase C | 拆巨兽：`ai.py`(3955) / `ui/pages/run.py`(1108) / `ui/theme.py`(922) / `main.py`(560) | ⏳ 未开始 |
+| Phase B | 包重构：`src`→`xyxbot`、`ui`→`xyxbot/ui`、`python -m xyxbot`、spec/CI 同步 | ✅ 完成 |
+| Phase C | 拆巨兽：`ai.py`(3955) / `ui/pages/run.py`(1108) / `ui/theme.py`(922) / `main.py`(560→10 行薄壳✅) | 🚧 进行中 |
 | Phase D | CI 接入 runner + README 重写 + 推送 | ⏳ 未开始 |
 
 > 施工细节与每步的验收输出见 `docs/REFACTOR.md`。
