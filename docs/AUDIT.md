@@ -11,11 +11,15 @@
 
 | 指标 | 实测 |
 |---|---|
-| 代码规模 | 97 个文件 / 21,248 行 Python |
+| 代码规模 | **77 个 `.py` 文件 / 28,411 行**（其中非空行 24,129） |
 | 测试安全网 | **1015 项断言全绿**（纯逻辑 778 + GUI 191 + 启动 27 + 全功能 19）+ `main.py selftest` 通过 |
 | 依赖健康 | 只有 `playwright` + `Pillow`，无私有依赖、无网络服务依赖 |
 | 平台覆盖 | Windows / macOS / Linux 三平台 CI 已在跑（`.github/workflows/tests.yml`） |
 | 打包链路 | Windows bat + macOS PyInstaller spec + GitHub Actions 自动打包，**链路是通的** |
+
+> 行数口径说明：本表数字是"文件总行数"（`splitlines()`）。体检第一版我用了
+> PowerShell 的 `Measure-Object -Line`，它不数空行，于是把 28,411 行报成了 21,248 行、
+> 把 `ai.py` 报成 3,955 行（实际 5,378）。已全部更正。
 
 所以这次不是"推倒重来"，而是**把已经跑得动的东西，整理成一个真正的工程**。
 
@@ -85,15 +89,18 @@ _t_e2e_full.py  _t_verify_shortcut.py                 ← 下划线开头的临�
 | bat 里写死解释器 | `start.bat`/`启动.bat`：`C:\Python312\python.exe`；`build.bat`：`C:\Users\Administrator\.workbuddy\binaries\python\versions\3.13.12\python.exe`（**这台开发机专属路径，别人机器上必挂**） |
 | README 1283 行 | 产品说明 + 迭代日记 + 命令行速查 + 大段实测输出混在一起，章节编号出现"八点五/八点六/八点七/八点八/八点九" |
 
-### 6. 三个巨石文件吃掉了全部改动
+### 6. 几个巨石文件吃掉了全部改动
 
 | 文件 | 行数 | 问题 |
 |---|---|---|
-| `src/ai.py` | **3955** | AI 续写/审稿/一条龙/批量跑章/元素定位/waiting 全在一个文件 |
-| `ui/pages/run.py` | 1108 | 一个页面塞了所有流程的界面逻辑 |
-| `ui/theme.py` | 922 | 主题 + 字体 + 卡片 + 重绘守卫 |
-| `main.py` | 560 | CLI 入口里 15 个子命令全平铺 |
-| `ui/pages/ai_flow.py` | 591 | 与 `ai.py` 职责重叠 |
+| `xyxbot/ai.py` | **5,378** | AI 续写 / 审稿 / 一条龙 / 批量跑章 / 元素定位 / 等待策略 全在一个文件（100 个顶层定义） |
+| `xyxbot/ui/pages/run.py` | 1,286 | 一个页面塞了所有流程的界面逻辑 |
+| `xyxbot/ui/theme.py` | 1,270 | 主题 + 字体 + 卡片 + 重绘守卫 |
+| `xyxbot/books.py` | 961 | 作品页交互 |
+| `xyxbot/ui/main_window.py` | 902 | 主窗口 + 导航 |
+| `xyxbot/novel.py` | 854 | 小说解析 |
+| `xyxbot/ui/pages/ai_flow.py` | 727 | 与 `ai.py` 职责重叠 |
+| `xyxbot/cli.py` | 560 | 原根目录 `main.py`，已搬进包内（根目录只剩 10 行薄壳） |
 
 另有重复定义：`main()` 15 份（每个脚本自己一套）、`say()` 6 份（diag 脚本各自复制）、
 `_shot()` 2 份、`create_book` 2 份；全项目 30 处 TODO/FIXME。

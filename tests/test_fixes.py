@@ -439,16 +439,16 @@ _lg_src = open(_LG.__file__, encoding="utf-8").read()
 _ai2_src = open(_AI2.__file__, encoding="utf-8").read()
 
 check_true("goto_books 不再固定 sleep(wait)",
-           "time.sleep(wait)" not in _bk_src.split("def goto_books")[1].split("def _on_books_page")[0])
+           "time.sleep(wait)" not in S.function_source("goto_books", "_on_books_page"))
 check_true("goto_books 等「作品列表出现」",
            "作品列表出现" in _bk_src)
 check_true("_on_books_page 用「已有作品卡」判据（不再只认 .create-card）",
-           "existing_card" in _bk_src.split("def _on_books_page")[1].split("def _click_sidebar_books")[0])
+           "existing_card" in S.function_source("_on_books_page", "_click_sidebar_books"))
 check_true("open_site_page 不再固定 sleep（条件等待渲染）",
            "站点首页渲染" in _lg_src)
 check_true("_click_sidebar_books 先清活动弹窗（遮罩会拦住点击）",
            "close_activity_modal(page, verbose=False)" in
-           _bk_src.split("def _click_sidebar_books")[1].split("def find_create_card")[0])
+           S.function_source("_click_sidebar_books", "find_create_card"))
 check_true("_click_sidebar_books 有 JS 降级（避免 15s 超时）",
            "→ JS 降级" in _bk_src)
 check_true("open_book 等「编辑器可用」（章节/工具栏出现）",

@@ -72,6 +72,33 @@ def resolve_legacy(rel: str) -> Path:
     return ROOT / rel
 
 
+def module_source(rel: str) -> str:
+    """把一个模块的源码读全。
+
+    * 模块还是单文件 → 返回该文件内容；
+    * 模块已经拆成分包（例如 `ai.py` → `ai/`）→ 返回包内所有 .py 的拼接。
+
+    用途：那些"整文件读一遍找关键字"的历史断言（主题色、字体缓存、
+    `<Configure>` 守卫的实测数字等）在拆分之后依然能通过，不用改断言。
+    """
+    p = resolve_legacy(rel)
+    if p.is_file():
+        return read(p)
+    if p.is_dir():
+        parts = []
+        for f in sorted(p.rglob("*.py")):
+            text = read(f)
+            # 拼在一起时要丢掉 `from __future__ import ...`：
+            # 它必须位于**文件开头**，拼接后会变成语法错误，而对静态检查毫无意义。
+            text = "\n".join(
+                line for line in text.splitlines()
+                if not line.strip().startswith("from __future__ import")
+            )
+            parts.append(text)
+        return "\n".join(parts)
+    return ""
+
+
 def legacy_rel(path) -> str:
     """把真实路径转回**重构前的叫法**（`src/x.py` / `ui/x.py`）。
 

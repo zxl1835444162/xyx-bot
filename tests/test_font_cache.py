@@ -229,7 +229,7 @@ try:
 
     # ================================================ ⑦ 静态检查
     print("\n=== ⑦ 静态检查：别再退回「只有命中才缓存」 ===")
-    src = S.ui_file("theme.py").read_text(encoding="utf-8")
+    src = S.module_source("ui/theme.py")
     check_true("解析结果无条件写缓存", "_FONT_CACHE[key] = result" in src)
     check_true("系统字体表有「已定稿」守卫（不会每次重来）",
                "if _SYS_FAMILIES is not None:" in src

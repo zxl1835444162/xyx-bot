@@ -260,7 +260,7 @@ check_true(f"ai.py 固定 sleep 总量 {tot:.1f}s < 12s（改造前 36.0s）", t
 print("\n=== C. 真机调试所发现缺陷的回归检查 ===")
 
 _SRC = S.PKG
-_AI_SRC = (_SRC / "ai.py").read_text(encoding="utf-8")
+_AI_SRC = S.module_source("src/ai.py")
 _ai_tree = ast.parse(_AI_SRC)
 
 
@@ -272,7 +272,7 @@ def _func_src(name: str) -> str:
 # 实测：locator('.__nope__').first.inner_text() → 15009ms
 #       current_associate_level 3 次 = 45.03s（15.01s/次）
 _bare = []
-for _p in sorted(_SRC.glob("*.py")):
+for _p in S.pkg_py_files():          # 含子包（ai/ 拆分后仍被审到）
     try:
         _t = ast.parse(_p.read_text(encoding="utf-8"))
     except Exception:

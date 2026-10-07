@@ -121,7 +121,7 @@ _calls = sum(p.read_text(encoding="utf-8").count("bind_configure(")
 check_true(f"bind_configure 被真正用起来了（{_calls} 处引用/定义）", _calls >= 8)
 
 # ★★ 断掉自激的核心：写自身尺寸的地方必须有「值没变就不写」的判断
-_src = S.ui_file("theme.py").read_text(encoding="utf-8")
+_src = S.module_source("ui/theme.py")
 check_true("Card._resize_win 里 self.configure(height) 带 != 判断",
            "self.winfo_reqheight() != need" in _src)
 
@@ -224,7 +224,7 @@ except Exception as e:
 
 # ==================================================== ⑥ 源码里写明原因
 print("\n=== ⑥ 源码里必须写明这是为什么 ===")
-_src = S.ui_file("theme.py").read_text(encoding="utf-8")
+_src = S.module_source("ui/theme.py")
 check_true("writeup 里有真机实测数据（97968 / 126038）",
            "97968" in _src and "126038" in _src)
 check_true("说明了 macOS 特有的行为", "macOS" in _src)

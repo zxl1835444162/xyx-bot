@@ -122,7 +122,7 @@ check_true("非 Windows 下不要求 .exe 后缀（改判可执行位）",
            "os.access(file_path, os.X_OK)" in _det)
 
 # ---- 字体：必须给 macOS 备好中文字体 ----
-_theme = S.ui_file("theme.py").read_text(encoding="utf-8")
+_theme = S.module_source("ui/theme.py")
 check_true("字体按平台分表", "UI_FONT_CANDIDATES" in _theme
            and "MONO_FONT_CANDIDATES" in _theme)
 check_true("macOS 首选 PingFang SC（系统中文默认字体）",
@@ -623,8 +623,8 @@ check_true("ui/（除 theme 外）没有写死 delta/120 的滚动量纲", not _
            "; ".join(_bad_120))
 
 # ★ 反过来：theme.wheel_units 必须**真的**按平台算，不能退化成只认一种量纲
-_wu_src = S.ui_file("theme.py").read_text(encoding="utf-8")
-_wu = _wu_src.split("def wheel_units", 1)[-1].split("\ndef ", 1)[0]
+_wu_src = S.module_source("ui/theme.py")
+_wu = S.function_source("wheel_units")
 check_true("wheel_units 里对 macOS 做了单独处理",
            "darwin" in _wu or "_platform_key" in _wu,
            "wheel_units 没按平台分支")

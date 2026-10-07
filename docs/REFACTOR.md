@@ -241,6 +241,36 @@ $ python -c "from xyxbot import _buildinfo; print(_buildinfo.describe())"
   v1.0.0 build=dev at=dev
 ```
 
+### C0 拆巨兽之前必须先做的事（完成）
+
+**为什么**：`ai.py` / `theme.py` 这些文件一旦拆成子包，两类历史断言会立刻失效：
+
+1. 直接读文件的：`S.ui_file("theme.py").read_text()`、`S.read(S.pkg_file("ai.py"))`
+   —— 拆完之后路径上没这个文件了；
+2. 切源码的：`源码.split("def A(")[1].split("def B(")[0]`
+   —— 函数搬到别的文件就切不到了。
+
+**做法**：在 `tests/_support.py` 加一个接口 `module_source(rel)`：
+
+```python
+module_source("ui/theme.py")   # 单文件模式 → 该文件内容
+module_source("ui/theme.py")   # 拆分之后  → 包内所有 .py 的拼接（自动过滤 __future__ 行）
+```
+
+拼接时要过滤 `from __future__ import ...`：它必须位于文件开头，拼起来会变成语法错误，
+而对静态检查毫无意义（这个是写完才发现、被 `ast.parse` 当场抓出来的）。
+
+然后把 17 处断言迁到新接口：
+
+* 整文件读 → `S.module_source(...)`（theme.py 4 处、ai.py 2 处、chapters.py 1 处）
+* 切源码 → `S.function_source("A", "B")`（ai.py 3 处、theme.py 1 处、books.py 3 处）
+* 动态导入 → `importlib.import_module(f"{S.PKG_NAME}.ai")`（不再假设 ai 是单个文件）
+* **顺手收紧一处审计**：test_waiting 的"没有裸 `inner_text()`"原来只扫
+  `PKG.glob("*.py")`（不含子目录），拆包后会漏掉新子包 → 改为 `S.pkg_py_files()`，
+  现在连子包和 ui/ 一起审。
+
+**验收**：`tests/run_all.py` → 12/12 用例通过、1015 项断言全绿。
+
 ---
 
 ## 路径对照表（给翻历史文档用）

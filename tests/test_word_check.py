@@ -173,8 +173,8 @@ check_true("ai_flow.py 使用 DEFAULT_MAX_RETRY",
 # ============================================ 3. 防「残留结果页」加固
 print("\n=== 3. 防残留结果页读到旧字数 ===")
 
-ai_src = _read("src/ai.py")
-ai_code = _real_code("src/ai.py")
+ai_src = S.module_source("src/ai.py")
+ai_code = _strip_strings(S.module_source("src/ai.py"))
 
 check_true("存在 _stale_result_present",
            "def _stale_result_present" in ai_src)
@@ -294,7 +294,7 @@ except Exception as e:
     print(f"  [WARN] 以包方式导入 src.ai 失败（{str(e).splitlines()[0]}），"
           f"尝试文件加载")
     try:
-        _spec = _ilu.spec_from_file_location("_ai_mod", str(S.pkg_file("ai.py")))
+        _ai_mod = _ilu.import_module(f"{S.PKG_NAME}.ai")   # 模块可能是个包（拆分后）
         _ai = _ilu.module_from_spec(_spec)
         _spec.loader.exec_module(_ai)
         _real_import = True
@@ -618,7 +618,7 @@ print("\n=== 10. 点不到「开始 AI 续写」：判据必须逐个探测可�
 # 根因：_visible() 只看 .first，多章残留/隐藏过渡层让 .first 命中不可见元素
 # ⇒ 判「找不到目标」直接 return False，三级降级一步没走。
 # 而同一页面上 _has_start_button()（逐个探测）说"有按钮" —— 自相矛盾。
-_vis_src = ai_src.split("def _visible(")[1].split("def _present(")[0]
+_vis_src = S.function_source("_visible", "_present")
 # ★ 只检查**真实代码**：剥掉注释行 + 文档字符串（三引号内的说明文字）。
 #   否则注释里解释历史的 "`.first` 会命中隐藏元素" 会误判为"代码里还在用"。
 import ast as _ast
@@ -770,7 +770,7 @@ check_true("「当前章正文」日志用 chapter_word_count",
            "chapter_word_count(page, body=_expect)" in _ai3_src)
 
 # ③ wait_body_change 返回站点口径（它一路传到界面结果表的「字数」列）
-_wbc_src = _ai3_src.split("def wait_body_change(")[1].split("def ai_auto_chapter(")[0]
+_wbc_src = S.function_source("wait_body_change", "ai_auto_chapter")
 check_true("wait_body_change 返回站点口径字数",
            "final = chapter_word_count(page)" in _wbc_src
            or "final = int(_last[0])" in _wbc_src)
@@ -804,7 +804,7 @@ check_true("优先只在「含开始按钮的续写弹窗」里找下拉",
 check_true("_relate_dropdown 遍历 scopes（弹窗优先 → 全页兜底）",
            "for root in _relate_scope_roots(page):" in _ai4_src)
 
-_rel_src = _ai4_src.split("def relate_chapters(")[1].split("def start_generate(")[0]
+_rel_src = S.function_source("relate_chapters", "start_generate")
 check_true("relate_chapters 有 _retried 参数（供内部重试）",
            "_retried: bool = False" in _rel_src)
 check_true("回读要求连续两次一致（_hit 计数 >= 2）",
