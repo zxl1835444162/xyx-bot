@@ -178,7 +178,7 @@ check("WaitResult 失败为假", bool(WaitResult(ok=False)), False)
 
 # ==================================================== B. 静态审计
 print("\n=== B. 关键路径已不再「傻等」（静态审计） ===")
-ai_src = S.pkg_file("ai.py").read_text(encoding="utf-8")
+ai_src = S.module_source("src/ai.py")
 tree = ast.parse(ai_src)
 
 

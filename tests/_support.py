@@ -66,10 +66,24 @@ def resolve_legacy(rel: str) -> Path:
     if rel.startswith("./"):
         rel = rel[2:]
     if rel.startswith("src/"):
-        return pkg_file(*rel[len("src/"):].split("/"))
+        return _resolve_in(pkg_file(*rel[len("src/"):].split("/")), rel)
     if rel.startswith("ui/"):
-        return ui_file(*rel[len("ui/"):].split("/"))
+        return _resolve_in(ui_file(*rel[len("ui/"):].split("/")), rel)
     return ROOT / rel
+
+
+def _resolve_in(path: Path, rel: str) -> Path:
+    """模块被拆成分包之后，`src/ai.py` 要能解析到 `xyxbot/ai/`。
+
+    这样历史断言里的 `module_source("src/ai.py")` 在拆分前后都成立。
+    """
+    if path.exists():
+        return path
+    if path.suffix == ".py":
+        pkg_init = path.parent / path.stem / "__init__.py"
+        if pkg_init.exists():
+            return pkg_init.parent
+    return path
 
 
 def module_source(rel: str) -> str:

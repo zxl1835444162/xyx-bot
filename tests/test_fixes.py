@@ -434,9 +434,9 @@ import xyxbot.books as _BK
 import xyxbot.login as _LG
 import xyxbot.ai as _AI2
 
-_bk_src = open(_BK.__file__, encoding="utf-8").read()
-_lg_src = open(_LG.__file__, encoding="utf-8").read()
-_ai2_src = open(_AI2.__file__, encoding="utf-8").read()
+_bk_src = S.module_source("src/books.py")
+_lg_src = S.module_source("src/login.py")
+_ai2_src = S.module_source("src/ai.py")
 
 check_true("goto_books 不再固定 sleep(wait)",
            "time.sleep(wait)" not in S.function_source("goto_books", "_on_books_page"))

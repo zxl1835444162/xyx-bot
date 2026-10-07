@@ -672,7 +672,7 @@ check("_parse_word_num 千字", _AI3._parse_word_num("1.2千字"), 1200)
 check("_parse_word_num 读不到 → -1", _AI3._parse_word_num(""), -1)
 check("_parse_word_num 非数字 → -1", _AI3._parse_word_num("abc"), -1)
 
-_ai3_src = open(_AI3.__file__, encoding="utf-8").read()
+_ai3_src = S.module_source("src/ai.py")
 check_true("存在 site_chapter_word_count（读站点自己显示的数）",
            "def site_chapter_word_count(" in _ai3_src)
 check_true("存在 chapter_word_count（统一入口，展示/上报都用它）",
@@ -792,7 +792,7 @@ print("\n=== 12. 「关联最近10章」：每次生成都要真的设上 ===")
 # 三个加固点：① 只在当前续写弹窗里读（防残留弹窗误判）
 #            ② 回读要连续两次一致（防菜单开着时假命中）
 #            ③ 失败自动重试一轮
-_ai4_src = open(_AI3.__file__, encoding="utf-8").read()
+_ai4_src = S.module_source("src/ai.py")
 
 check_true("存在 _relate_dropdown_in（可指定容器搜索）",
            "def _relate_dropdown_in(" in _ai4_src)
