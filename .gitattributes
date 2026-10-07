@@ -2,6 +2,17 @@
 *.bat text eol=crlf
 *.cmd text eol=crlf
 
+# 其余文本一律 LF：源码要跨平台（CI 跑 macOS/Linux），
+# 而且 Windows 上 `Path.write_text()` 默认会把 \n 写成 \r\n，
+# 一不小心就让整份文件"全变了"。这条规则让 git 站在 LF 这边。
+* text=auto eol=lf
+
+# 二进制，别碰
+*.png binary
+*.ico binary
+*.icns binary
+*.pyc binary
+
 # Shell 脚本强制 LF
 *.sh text eol=lf
 *.command text eol=lf
