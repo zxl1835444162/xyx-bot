@@ -419,8 +419,8 @@ check_true("build-macos 用了 PyInstaller spec",
            "xyxbot.spec" in wf_texts.get("build-macos.yml", ""))
 check_true("build-macos 会上传产物（upload-artifact）",
            "upload-artifact" in wf_texts.get("build-macos.yml", ""))
-check_true("build-macos 打包前先跑测试",
-           "test_portability" in wf_texts.get("build-macos.yml", ""))
+check_true("build-macos 打包前先跑测试（统一 runner，--quick 会跑 test_portability）",
+           "run_all.py" in wf_texts.get("build-macos.yml", ""))
 check_true("build-macos 用 ditto 压缩",
            "ditto -c -k" in wf_texts.get("build-macos.yml", ""))
 check_true("build-macos 用 --selftest 冒烟（headless 也能跑）",
@@ -460,8 +460,8 @@ check_true("窗口探测把「没跑起来」当失败（不许静默假绿）",
 #   因此新增 test_all_features_macos.py（真驱动事件循环、逐页验证），
 #   并要求 tests.yml 里**确实调用**它。这条断言就是防止哪天有人把它删了。
 _tests_wf = wf_texts.get("tests.yml", "")
-check_true("tests.yml 跑了「全功能体检」（9 个页面逐个真跑）",
-           "test_all_features_macos" in _tests_wf)
+check_true("tests.yml 跑了「全功能体检」（9 个页面逐个真跑；统一 runner 会带上它）",
+           "test_all_features_macos" in _tests_wf or "run_all.py" in _tests_wf)
 check_true("全功能测试真的存在于仓库里",
            (ROOT / "tests" / "test_all_features_macos.py").exists())
 # 它必须能驱动事件循环 —— 不能写成 `darwin + CI → 跳过` 那种自我阉割。

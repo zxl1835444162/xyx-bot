@@ -1,10 +1,12 @@
 name: tests
 
-# 三平台跑测试。
+# 三平台跑全部测试。
 # 目的：确认这套代码在 macOS 上没有"只有 Windows 才能过"的隐含假设。
-# GUI 测试在没有窗口服务器的 runner 上会**自动 SKIP**（见
-# tests/test_gui_pages.py 的 _require_display），跨平台逻辑由
-# tests/test_portability.py 兜底。
+#
+# ★ 用例清单不再写在这个文件里：`tests/run_all.py` 自己发现 tests/test_*.py，
+#   以前是"新增测试要记得回来改 yml"，很容易漏 → 现在不会再漏。
+#   GUI 用例在没有窗口服务器的 runner 上会**自动 SKIP**（见 tests/*.py 的 _require_display），
+#   跨平台逻辑由 tests/test_portability.py 兜底。
 
 on:
   push:
@@ -20,14 +22,14 @@ jobs:
     name: ${{ matrix.os }} / py${{ matrix.python }}
     runs-on: ${{ matrix.os }}
     # ★ 兜底：防止某一步死等把额度烧光（界面探测已在 CI 里自动关闭）
-    timeout-minutes: 15
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
         os:
           - ubuntu-latest
           - windows-latest
-          - macos-15          # Apple Silicon；macos-13 已退役、macos-14 正在退役
+          - macos-15          # Apple Silicon
         python: ["3.12"]
 
     steps:
@@ -47,44 +49,22 @@ jobs:
         run: python main.py selftest
         continue-on-error: true        # 无窗口服务器时"图形会话"会报不可用
 
-      - name: 纯逻辑测试（不需要窗口）
-        shell: bash
-        run: |
-          set -e
-          for t in test_fixes test_waiting test_runplan test_memory test_portability test_font_cache test_configure_guard test_novel_split test_word_check; do
-            echo "=============================== $t ==============================="
-            python "tests/$t.py"
-          done
-
-      - name: GUI 测试（无窗口服务器时会自动 SKIP）
+      - name: 全部测试（统一 runner：自动发现用例 + 超时 + 落日志）
         env:
-          XYX_NO_DIALOG: "1"        # 别让模态窗把 runner 卡住
-        run: python tests/test_gui_pages.py
-
-      - name: ★ 启动 → 主操控界面 回归（真实事件循环；无窗口会自动 SKIP）
-        # 这一条是「启动后界面没出来」的守门人：
-        # 以前所有 GUI 测试只"构造"窗口、从不驱动事件循环，所以看不见
-        # "窗口建好了但没显示/事件循环死了"。这个测试用 update() 泵事件
-        # 走完真实启动流程，并断言主窗口**真的可见**；带看门狗，
-        # 卡住会直接 dump 主线程栈。
-        env:
-          XYX_NO_DIALOG: "1"
-          XYX_HANG_SECONDS: "20"
+          XYX_NO_DIALOG: "1"           # 别让模态窗把 runner 卡住
+          XYX_HANG_SECONDS: "20"       # 启动回归的看门狗
           XYX_PUMP_SECONDS: "10"
-        run: python tests/test_startup.py
-
-      - name: ★★ 全功能体检：9 个页面逐个真跑一遍（用户要求「在 mac 上测所有功能」）
-        # ★ 2026-10-04 新增。补上 CI 里最大的一个盲区：
-        #   * test_gui_pages.py 在 mac 上 __require_display() 直接 SKIP
-        #   * test_startup.py 的驱动部分对 `darwin + CI` 也 SKIP
-        #   于是「Mac 上 GUI 到底行不行」从来没被真正验证过 ——
-        #   而打包时的 --selftest --window 明明能在这台 runner 上把窗口
-        #   显示出来（实测 0.29~0.68s），说明它**有能力**驱动事件循环。
-        #   这条测试真驱动事件循环，把 9 个页面逐个构建 + 断言 viewable +
-        #   切页不丢控件 + 重绘计数 + 关窗收尾。
-        #   ★ 三平台都跑：Linux headless 会优雅 SKIP（不是失败），
-        #     windows / macos 会真的执行。
-        env:
-          XYX_NO_DIALOG: "1"
           XYX_FEATURE_PUMP: "5"
-        run: python tests/test_all_features_macos.py
+        run: python tests/run_all.py
+
+      - name: 失败时把测试日志贴出来
+        if: failure()
+        run: |
+          echo "::group::每个用例的完整输出"
+          for f in artifacts/logs/tests/*.log; do
+            echo "---------- $f"
+            tail -60 "$f" || true
+          done
+          echo "::endgroup::"
+        shell: bash
+        continue-on-error: true

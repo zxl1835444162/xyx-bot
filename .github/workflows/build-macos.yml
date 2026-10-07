@@ -69,13 +69,10 @@ jobs:
           pip install "pyinstaller>=6.6"
 
       - name: 打包前的纯逻辑测试（跑不过就别打包）
-        shell: bash
+        env:
+          XYX_NO_DIALOG: "1"
         run: |
-          set -e
-          for t in test_fixes test_waiting test_runplan test_memory test_portability test_font_cache test_configure_guard test_startup; do
-            echo "=============================== $t ==============================="
-            python "tests/$t.py"
-          done
+          python tests/run_all.py --quick
 
       - name: 写入构建信息（方便远程确认"用户装的是哪个版本"）
         shell: bash

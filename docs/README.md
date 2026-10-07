@@ -5,7 +5,8 @@
 | 文档 | 标签 | 还准吗 | 讲什么 |
 |---|---|---|---|
 | [`AUDIT.md`](AUDIT.md) | **现行** | ✅ | 项目体检报告：结构问题的硬数据、"纸糊感"的六个来源、目标形态与施工分期 |
-| [`REFACTOR.md`](REFACTOR.md) | **现行** | ✅ | 施工记录：每一步改了什么、验收到什么输出、为什么这么做 |
+| [`REFACTOR.md`](REFACTOR.md) | **现行** | ✅ | 施工记录：每一步改了什么、验收到什么输出、踩过的坑 |
+| [`USAGE_DETAIL.md`](USAGE_DETAIL.md) | **现行（路径是旧的）** | ✅ 细节可用 | 原 README 全文：登录、界面每个按钮、命令行全参数、CDP 接管、FAQ，含大量真机实测记录 |
 | [`ARCHITECTURE_PLAN.md`](ARCHITECTURE_PLAN.md) | 历史归档 | ⚠️ 部分 | 最早的分包设想（`src/` + `ui/` 的来源）；结论已被 AUDIT 取代 |
 | [`UI_REDESIGN_PLAN.md`](UI_REDESIGN_PLAN.md) | 历史归档 | ⚠️ 部分 | 界面从 7 项导航收敛为 3 项的设计过程 |
 | [`MACOS_PORT.md`](MACOS_PORT.md) | 历史归档 | ✅ 参考价值高 | macOS 移植全过程：Tk/NSApp 崩溃根因、打包、签名、DMG、排障 |
