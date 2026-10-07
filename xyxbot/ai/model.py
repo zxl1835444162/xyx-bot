@@ -16,6 +16,8 @@ from xyxbot.ai.selectors import AI_SELECTORS, ASSOCIATE_MARKS, ASSOCIATE_SLIDER_
 
 __all__ = ["fill_plot", "select_model", "set_associate_level"]
 
+
+
 def set_associate_level(page: Page, level: str = "正常",
                         container: str = "") -> bool:
     """设置「联想能力」档位（滑块，6 档）。
@@ -127,6 +129,8 @@ def set_associate_level(page: Page, level: str = "正常",
     except Exception:
         pass
     return ok
+
+
 
 def select_model(page: Page, model: str = "细腻版",
                  associate: str = "正常",
@@ -380,6 +384,8 @@ def select_model(page: Page, model: str = "细腻版",
     print(f"[ai] ✗ 模型没切成功：仍显示「{after or '(空)'}」（目标「{want}」）")
     _shot(page, "ai_model_switch_failed")
     return False
+
+
 
 def fill_plot(page: Page, text: str) -> bool:
     """填写「后续剧情」。

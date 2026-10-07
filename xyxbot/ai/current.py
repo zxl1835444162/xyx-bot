@@ -12,6 +12,8 @@ from xyxbot.ai.selectors import AI_SELECTORS, ASSOCIATE_MARKS
 
 __all__ = ["_text_of", "current_associate_level", "current_model", "current_review_requirement", "current_shortcut"]
 
+
+
 def current_model(page: Page, container: str = ".n-modal") -> str:
     """回读顶部模型选择器当前显示的名字（如「细腻版」「奇想版」）。
 
@@ -24,6 +26,8 @@ def current_model(page: Page, container: str = ".n-modal") -> str:
                         timeout=400)
     except Exception:
         return ""
+
+
 
 def _text_of(loc, timeout: float = 300) -> str:
     """安全读文本：元素不存在时**立刻**返回空串。
@@ -50,6 +54,8 @@ def _text_of(loc, timeout: float = 300) -> str:
     except Exception:
         return ""
 
+
+
 def current_associate_level(page: Page) -> str:
     """回读当前「联想能力」档位（如「正常」）。读不到返回空串。
 
@@ -70,10 +76,35 @@ def current_associate_level(page: Page) -> str:
             return mark
     return ""
 
+
+
+# ---------------------------------------------------------------- 快捷选项
+#
+# ★ 实测（2026-10-03）「快捷选项」这一行（红框那一行）：
+#
+#   它是个 **Naive UI 的 n-select**，但点它 **不弹下拉菜单**，
+#   而是弹出一个**全屏 modal**（`.shortcut-picker-modal`），里面：
+#     - 左栏「已收藏」：一行一个 `.prompt-row`（含 `.row-title` 文字）
+#     - 右栏「最新」  ：同样是 `.prompt-row`
+#     - 底部：创建 / 编辑 / 更多提示词
+#
+#   点中某一行 `.prompt-row` → 面板自动关闭 → 顶部那一行变成该提示词的名字。
+#
+#   ★ 通用定位方式（不受列表顺序、收藏变动影响）：
+#       `.shortcut-picker-modal .prompt-row:has-text('关键词')`
+#   即 **用文字定位**，而不是记第几行。
+#
+#   额外兜底：
+#     - 面板里可以先用搜索框搜关键词，缩小列表再点
+#     - 文字可能被站点改写（如「云哥/云霄」「逆袭/逆徒」），
+#       所以支持**模糊关键词**（取几个稳定的字即可）
+
 def current_shortcut(page: Page) -> str:
     """回读「快捷选项」那一行当前显示的提示词名字。"""
     return _text_of(page.locator(AI_SELECTORS["shortcut_row"][0]),
                     timeout=400)
+
+
 
 def current_review_requirement(page: Page) -> str:
     """回读「审稿要求」那一行当前显示的提示词名。"""

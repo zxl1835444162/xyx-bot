@@ -27,7 +27,14 @@ from xyxbot.ai.shortcuts import pick_shortcut
 
 __all__ = ["ai_auto_chapter", "ai_batch_chapters", "ai_continue", "ai_review"]
 
+
+# ★ 最近一次「按字数自动决策」的详细结果（dict），供 GUI 显示用。
+#   ai_continue() 保持返回 bool（兼容所有调用方），细节放这里。
 LAST_DECISION: Optional[dict] = None
+
+
+
+# ---------------------------------------------------------------- 组合流程
 
 def ai_continue(page: Page,
                 plot: str = "",
@@ -195,6 +202,8 @@ def ai_continue(page: Page,
     LAST_DECISION = None
     return True
 
+
+
 def ai_review(page: Page,
               text: str = "",
               model: str = "智慧版",
@@ -349,6 +358,8 @@ def ai_review(page: Page,
         return replace_review_result(page)
 
     return True
+
+
 
 def ai_auto_chapter(page: Page,
                     # ---- 续写参数 ----
@@ -695,6 +706,8 @@ def ai_auto_chapter(page: Page,
     print(f"    审稿替换 : {'✓ 完成' if rev_ok else '✗ 失败'}")
     print("=" * 58)
     return result
+
+
 
 def ai_batch_chapters(page: Page,
                       start: int = 1,

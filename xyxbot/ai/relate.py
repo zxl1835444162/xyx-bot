@@ -17,6 +17,8 @@ from xyxbot.ai.selectors import RELATE_DROPDOWN_SEL, _CONTINUE_MODAL_SEL
 
 __all__ = ["_relate_dropdown", "_relate_dropdown_in", "_relate_scope_roots", "_scroll_relate_into_view", "current_relate_count", "relate_chapters"]
 
+
+
 def _relate_scope_roots(page: Page):
     """按优先级返回「应该在哪些容器里找关联下拉」的 Locator 列表。
 
@@ -38,6 +40,8 @@ def _relate_scope_roots(page: Page):
         pass
     roots.append(None)               # None = 全页兜底
     return roots
+
+
 
 def _relate_dropdown_in(root):
     """在给定容器里找「最近N章 ⌄」下拉按钮（root=None → 全页）。"""
@@ -75,6 +79,8 @@ def _relate_dropdown_in(root):
         pass
     return None
 
+
+
 def _relate_dropdown(page: Page):
     """定位「最近N章 ⌄」下拉按钮（找不到返回 None）。只读，不点击。
 
@@ -85,6 +91,8 @@ def _relate_dropdown(page: Page):
         if b is not None:
             return b
     return None
+
+
 
 def current_relate_count(page: Page) -> int:
     """回读「关联章节」当前档位。
@@ -98,6 +106,8 @@ def current_relate_count(page: Page) -> int:
     m = re.search(r"最近(\d+)章", _text_of(b, timeout=400))
     return int(m.group(1)) if m else -1
 
+
+
 def _scroll_relate_into_view(page: Page) -> None:
     """把「关联章节」按钮组滚进视口（它永远在弹窗最底部）。
 
@@ -109,6 +119,8 @@ def _scroll_relate_into_view(page: Page) -> None:
         loc.evaluate("e => { e.scrollTop = e.scrollHeight; }")
     except Exception:
         pass
+
+
 
 def relate_chapters(page: Page, count: int = 10, force: bool = False,
                     _retried: bool = False) -> bool:

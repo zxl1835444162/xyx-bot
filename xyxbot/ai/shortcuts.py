@@ -16,6 +16,8 @@ from xyxbot.ai.selectors import AI_SELECTORS
 
 __all__ = ["close_shortcut_panel", "open_shortcut_panel", "pick_shortcut", "wait_shortcut_loaded"]
 
+
+
 def open_shortcut_panel(page: Page) -> bool:
     """点「快捷选项」那一行，打开提示词选择面板。"""
     loc = page.locator(AI_SELECTORS["shortcut_row"][0]).first
@@ -55,6 +57,8 @@ def open_shortcut_panel(page: Page) -> bool:
     print("[ai] ✗ 快捷选项面板没出现")
     _shot(page, "ai_shortcut_panel_missing")
     return False
+
+
 
 def wait_shortcut_loaded(page: Page, timeout: float = 20.0,
                          poll: float = 0.1, keyword: str = "") -> int:
@@ -164,6 +168,8 @@ def wait_shortcut_loaded(page: Page, timeout: float = 20.0,
     print(f"[ai] ⚠ 快捷选项加载超时（{last} 项）")
     return max(last, 0)
 
+
+
 def close_shortcut_panel(page: Page) -> None:
     """关掉快捷选项面板（ESC）。
 
@@ -178,6 +184,8 @@ def close_shortcut_panel(page: Page) -> None:
                       timeout=1.5, interval=0.05, desc="快捷选项面板关闭")
     except Exception:
         pass
+
+
 
 def pick_shortcut(page: Page, keyword: str = "", index: int = 0,
                   search_first: bool = False,

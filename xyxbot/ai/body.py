@@ -17,6 +17,19 @@ from xyxbot.ai.selectors import AI_SELECTORS
 
 __all__ = ["_parse_word_num", "_selection_len", "chapter_word_count", "count_chars", "editor_ready", "get_body_text", "select_all_body", "site_chapter_word_count", "wait_body_change"]
 
+
+
+# ---------------------------------------------------------------- 正文编辑器
+#
+# ★ 实测（2026-10-03）—— 审稿的两个前置条件，缺一不可：
+#     ① 必须先**打开一个章节**（不打开的话正文区是空的，待审文本也是空的）
+#     ② 生成完成后要**先全选正文**再点「替换 / 插入」，
+#        否则会在光标处**插入**（原文还在，变成前后拼接）；
+#        选中之后才会**替换**掉原文。
+#
+#   编辑器正文 = `.tiptap.ProseMirror`
+#   全选按钮   = `button[aria-label='全选']`（★ aria-label 不是 title）
+
 def editor_ready(page: Page,
                  need_text: bool = False) -> bool:
     """正文编辑器是否已就绪（有 .tiptap.ProseMirror 且可见）。
@@ -39,6 +52,8 @@ def editor_ready(page: Page,
             continue
     return False
 
+
+
 def get_body_text(page: Page) -> str:
     """读正文编辑器里的纯文本。
 
@@ -56,6 +71,8 @@ def get_body_text(page: Page) -> str:
         }""") or ""
     except Exception:
         return ""
+
+
 
 def count_chars(text: str) -> int:
     """按**站点口径**数「字数」：空白不计（换行 / 空格 / 全角空格都不算）。
@@ -79,6 +96,8 @@ def count_chars(text: str) -> int:
         return 0
     return sum(1 for ch in text if not ch.isspace())
 
+
+
 def _parse_word_num(s: str) -> int:
     """把站点上的字数文本解析成 int。
 
@@ -97,6 +116,8 @@ def _parse_word_num(s: str) -> int:
     if m:
         return int(m.group(0))
     return -1
+
+
 
 def site_chapter_word_count(page: Page) -> int:
     """读**站点自己显示的**本章字数（用户对照的那个数）。读不到返回 -1。
@@ -138,6 +159,8 @@ def site_chapter_word_count(page: Page) -> int:
             continue
     return -1
 
+
+
 def chapter_word_count(page: Page, body: str | None = None) -> int:
     """**本章字数**（统一口径，展示/上报一律用这个）。
 
@@ -148,6 +171,8 @@ def chapter_word_count(page: Page, body: str | None = None) -> int:
     if v > 0:
         return v
     return count_chars(body if body is not None else get_body_text(page))
+
+
 
 def select_all_body(page: Page, verify: bool = True) -> bool:
     """★ 全选正文编辑器里的内容。
@@ -223,6 +248,8 @@ def select_all_body(page: Page, verify: bool = True) -> bool:
     _shot(page, "ai_select_all_failed")
     return False
 
+
+
 def _selection_len(page: Page) -> int:
     """当前选区长度（字符数）。"""
     try:
@@ -231,6 +258,8 @@ def _selection_len(page: Page) -> int:
             " return s ? s.toString().length : 0; }") or 0)
     except Exception:
         return 0
+
+
 
 def wait_body_change(page: Page, before_len: int = -1,
                      timeout: float = 20.0, poll: float = 1.0,

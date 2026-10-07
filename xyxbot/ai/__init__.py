@@ -1,7 +1,51 @@
-"""AI 自动化（原 `xyxbot/ai.py`，5378 行，已按职责拆分）。
+"""星月写作 —— AI 续写正文自动化。
 
-对外接口完全不变：`from xyxbot import ai as AI` 之后照旧 `AI.xxx(...)`。
-内部结构见各子模块；依赖顺序由 AST 拓扑排序保证。
+流程（每一步都实测过选择器）：
+
+    1. 进编辑器页（用 books.open_book）
+    2. 点顶部「AI续写正文」按钮
+    3. 在弹窗里：
+       a. 选「快捷选项」（提示词）—— ★ 用文字定位，见 pick_shortcut()
+       b. 选模型 → 打开模型面板 → 点「细腻版」→ 点「使用此模型」
+       c. 填「后续剧情」= 前缀 + 内容 + 后缀
+       d. 关联章节 → 展开 → 点箭头 → 选「最近10章」
+       e. 点「开始 AI 续写」
+
+★ 实测于 2026-10-03。关键选择器：
+
+| 元素 | 选择器 |
+|---|---|
+| AI续写正文按钮 | `button:has-text('AI续写正文')` |
+| 后续剧情输入框 | `.n-modal textarea[placeholder*='后续剧情走向']` |
+| 模型选择器 | `.n-modal .n-base-selection` （显示当前版本名，如「奇想版」） |
+| 细腻版（分类） | `span.flex-1.truncate:has-text('细腻版')` |
+| 联想能力按钮 | `button:has-text('联想能力')` |
+| 使用此模型 | `button:has-text('使用此模型')` |
+| 关联章节头 | `button:has-text('关联章节')` |
+| 章节数下拉箭头 | `button.h-9.w-7`（在「最近5章」右边） |
+| 开始AI续写 | `button:has-text('开始 AI 续写')` |
+
+★ 「快捷选项」（续写要求那一行）—— 实测反直觉，单独说：
+
+| 元素 | 选择器 |
+|---|---|
+| 那一行（Naive n-select） | `.n-form-item:has-text('续写要求') .n-base-selection` |
+| 弹出的全屏面板 | `.shortcut-picker-modal` |
+| 面板里的提示词行 | `.shortcut-picker-modal .prompt-row` |
+| 行内标题文字 | `.row-title` |
+| 面板搜索框 | `.shortcut-picker-modal input[placeholder*='搜索']` |
+
+**点那一行不弹下拉菜单，而是弹一个全屏 modal**；
+面板里点中某一行 `.prompt-row` → 面板自动关 → 那一行显示改成该提示词名。
+**定位方式：用文字**（`.prompt-row:has-text('关键词')`），
+不记第几行 —— 因为列表顺序 / 收藏数 / 运营推荐都会变。
+
+---
+（上面这段是拆分前 `xyxbot/ai.py` 的模块说明，原样保留。）
+
+实现已按职责拆分到本包的 12 个子模块，依赖顺序由 AST 拓扑排序保证：
+selectors → elements → dialog → current → model → shortcuts → relate
+          → body → generate → chapters → review → flows
 """
 
 from __future__ import annotations

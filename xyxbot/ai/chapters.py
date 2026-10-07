@@ -19,6 +19,8 @@ from xyxbot.ai.selectors import AI_SELECTORS
 
 __all__ = ["_chapter_ready", "chapter_items", "chapter_numbers", "current_chapter_no", "ensure_chapter", "open_chapter"]
 
+
+
 def chapter_items(page: Page):
     """定位左栏章节项（★ 用**容器** `.chapter-item`，不是标题 h3）。
 
@@ -42,6 +44,8 @@ def chapter_items(page: Page):
         except Exception:
             continue
     return page.locator(".chapter-item")
+
+
 
 def open_chapter(page: Page, which: str = "", index: int = 0,
                  wait: float = 2.5) -> bool:
@@ -147,6 +151,10 @@ def open_chapter(page: Page, which: str = "", index: int = 0,
     _shot(page, "ai_open_chapter_empty")
     return False
 
+
+
+# ================================================================ 批量跑章 ★
+
 def chapter_numbers(page: Page) -> List[int]:
     """只读：列出左栏所有章节的章号（按 DOM 顺序，站点是倒序）。
 
@@ -166,6 +174,8 @@ def chapter_numbers(page: Page) -> List[int]:
     except Exception:
         pass
     return nos
+
+
 
 def current_chapter_no(page: Page) -> int:
     """只读：当前**已打开**（active）的章号；识别不了返回 -1。
@@ -193,6 +203,8 @@ def current_chapter_no(page: Page) -> int:
     except Exception:
         pass
     return -1
+
+
 
 def ensure_chapter(page: Page, no: int, wait: float = 2.0,
                    max_new: int = 120) -> bool:
@@ -262,6 +274,8 @@ def ensure_chapter(page: Page, no: int, wait: float = 2.0,
         print(f"[ai] ✗ 新建后仍没有第{no}章（现有 {chapter_numbers(page)}）")
         _shot(page, "ai_ensure_chapter_failed")
     return ok
+
+
 
 def _chapter_ready(page: Page) -> bool:
     """★ 章间「可以继续下一章」的判据（2026-10-05 新增）。

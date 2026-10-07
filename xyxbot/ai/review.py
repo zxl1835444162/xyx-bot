@@ -18,6 +18,8 @@ from xyxbot.ai.shortcuts import pick_shortcut
 
 __all__ = ["_same_body", "close_review_pane", "dismiss_review_confirm", "fill_review_text", "open_review_pane", "pick_review_requirement", "read_body_settled", "read_review_body", "read_review_box", "replace_review_result", "review_generating", "review_pane_open", "review_result_ready", "start_review", "strip_review_wrapper", "wait_review_done"]
 
+
+
 def open_review_pane(page: Page, wait: float = 0.6,
                      max_try: int = 4,
                      expect_body: str = "") -> bool:
@@ -126,6 +128,8 @@ def open_review_pane(page: Page, wait: float = 0.6,
     _shot(page, "ai_review_pane_missing")
     return False
 
+
+
 def review_pane_open(page: Page) -> bool:
     """审稿面板是否已打开（★ 用文字锚点，不依赖动态类名）。"""
     try:
@@ -133,6 +137,8 @@ def review_pane_open(page: Page) -> bool:
         return bool(loc.count() and loc.first.is_visible())
     except Exception:
         return False
+
+
 
 def close_review_pane(page: Page, wait: float = 1.0, max_try: int = 3) -> bool:
     """关闭右侧「AI审稿」抽屉。
@@ -207,6 +213,8 @@ def close_review_pane(page: Page, wait: float = 1.0, max_try: int = 3) -> bool:
     print("[ai] ⚠ 审稿抽屉仍未关（继续，不阻断）")
     return not review_pane_open(page)
 
+
+
 def strip_review_wrapper(text: str) -> str:
     """★ 把「指令 + 分隔线 + 正文」剥回**纯正文**（2026-10-04 新增）。
 
@@ -236,6 +244,8 @@ def strip_review_wrapper(text: str) -> str:
     body = text.rsplit(REVIEW_SEP, 1)[-1]
     return body.strip()
 
+
+
 def _same_body(a: str, b: str, tol: float = 0.02) -> bool:
     """两份正文是否「基本是同一段」（用于校验抽屉里装的是不是当前章）。
 
@@ -264,6 +274,8 @@ def _same_body(a: str, b: str, tol: float = 0.02) -> bool:
         return True
     return False
 
+
+
 def read_review_body(page: Page) -> str:
     """读「待审文本」框里的**纯正文**（自动剥掉可能存在的旧指令层）。
 
@@ -271,6 +283,8 @@ def read_review_body(page: Page) -> str:
     """
     raw = read_review_box(page)
     return strip_review_wrapper(raw)
+
+
 
 def read_review_box(page: Page) -> str:
     """读「待审文本」框里**已有的原始内容**（未做任何剥离）。
@@ -306,6 +320,8 @@ def read_review_box(page: Page) -> str:
         except Exception:
             continue
     return ""
+
+
 
 def read_body_settled(page: Page, timeout: float = 6.0,
                       min_len: int = 1) -> str:
@@ -370,6 +386,8 @@ def read_body_settled(page: Page, timeout: float = 6.0,
     print(f"[ai] ⚠ 等了 {timeout:.1f}s，待审文本框与编辑器都为空"
           f"→ 追加指令将只填指令部分")
     return ""
+
+
 
 def fill_review_text(page: Page, text: str = "",
                      instruction: str = "",
@@ -479,6 +497,9 @@ def fill_review_text(page: Page, text: str = "",
     print("[ai] 待审文本：留空，沿用页面自带内容")
     return True
 
+
+
+
 def pick_review_requirement(page: Page, keyword: str = "",
                             tab: str = "快捷选项") -> bool:
     """选「审稿要求」里的提示词（★ 默认用「快捷选项」tab）。
@@ -581,6 +602,8 @@ def pick_review_requirement(page: Page, keyword: str = "",
     print(f"[ai] ⚠ 审稿要求回读：「{after[:50]}」（目标含「{keyword}」）")
     return ok
 
+
+
 def start_review(page: Page, wait: float = 0.5) -> bool:
     """点审稿卡片**底部固定栏**的「生成」按钮，开始审稿。
 
@@ -650,6 +673,8 @@ def start_review(page: Page, wait: float = 0.5) -> bool:
         print("[ai] ✓ 已触发生成（未观测到生成中状态，继续）")
     return True
 
+
+
 def review_generating(page: Page) -> bool:
     """审稿是否仍在生成中。
 
@@ -672,6 +697,8 @@ def review_generating(page: Page) -> bool:
         return bool(page.locator("text=思考中").count())
     except Exception:
         return False
+
+
 
 def review_result_ready(page: Page) -> bool:
     """审稿结果是否已就绪（★ 权威判据：「替换 / 插入」按钮出现）。
@@ -722,6 +749,8 @@ def review_result_ready(page: Page) -> bool:
         }"""))
     except Exception:
         return False
+
+
 
 def wait_review_done(page: Page, timeout: float = 600.0,
                      poll: float = 0.4,
@@ -788,6 +817,8 @@ def wait_review_done(page: Page, timeout: float = 600.0,
     print(f"[ai] ✗ 等审稿超时（{timeout:.0f}s）")
     _shot(page, "ai_review_timeout")
     return False
+
+
 
 def replace_review_result(page: Page, wait: float = 1.0) -> bool:
     """点「替换 / 插入」，把审稿结果**落到正文**。
@@ -892,6 +923,8 @@ def replace_review_result(page: Page, wait: float = 1.0) -> bool:
         pass
 
     return True
+
+
 
 def dismiss_review_confirm(page: Page, verbose: bool = True) -> int:
     """关掉「替换」可能弹出的二次确认框。

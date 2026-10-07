@@ -15,6 +15,10 @@ from xyxbot.ai.selectors import AI_SELECTORS
 
 __all__ = ["_close_any_continue_dialog", "_close_stale_result", "_fake_continue_dialog_present", "_has_start_button", "_stale_result_present", "close_continue_dialog", "continue_dialog_open", "open_continue_dialog"]
 
+
+
+# ---------------------------------------------------------------- 流程步骤
+
 def _stale_result_present(page: Page) -> bool:
     """★ 弹窗里是否残留着**上一轮的结果页**。
 
@@ -57,6 +61,8 @@ def _stale_result_present(page: Page) -> bool:
         return False
     except Exception:
         return False
+
+
 
 def _close_stale_result(page: Page) -> bool:
     """关掉残留的结果弹窗，给新弹窗让路。
@@ -114,6 +120,8 @@ def _close_stale_result(page: Page) -> bool:
               interval=0.1, desc="残留结果页关闭")
     return closed
 
+
+
 def _has_start_button(page: Page) -> bool:
     """当前页面上是否**可见**「开始 AI 续写」按钮（续写弹窗可用的权威标志）。
 
@@ -136,6 +144,8 @@ def _has_start_button(page: Page) -> bool:
             continue
     return False
 
+
+
 def _fake_continue_dialog_present(page: Page) -> bool:
     """是否存在**假的**续写弹窗：有「续写正文」字样、但没有「开始 AI 续写」按钮。
 
@@ -148,6 +158,8 @@ def _fake_continue_dialog_present(page: Page) -> bool:
         return loc is not None
     except Exception:
         return False
+
+
 
 def _close_any_continue_dialog(page: Page) -> bool:
     """关掉当前的续写弹窗（不论真假），容忍关不掉。
@@ -185,6 +197,8 @@ def _close_any_continue_dialog(page: Page) -> bool:
     wait_gone(lambda: _fake_continue_dialog_present(page), timeout=2.5,
               interval=0.1, desc="假续写弹窗关闭")
     return closed
+
+
 
 def open_continue_dialog(page: Page, wait: float = 3.0) -> bool:
     """点顶部「AI续写正文」，等弹窗出现。
@@ -264,6 +278,32 @@ def open_continue_dialog(page: Page, wait: float = 3.0) -> bool:
     _shot(page, "ai_dialog_missing")
     return False
 
+
+
+# ================================================================ ★ 续写 → 审稿 串联
+#
+#   用户需求（2026-10-03）：
+#     「一章的生成已经完成了，我有些担心**生成完之后、与审稿开始之间的状态**，
+#       请你从 0 开始走一遍流程，让字数限制宽一点，避免重试；
+#       另外你接了吗？就是，**生成完之后，接着审稿**」
+#
+#   ★ 为什么单独写这个函数：
+#     续写（弹窗）和审稿（右侧抽屉）是**两套完全不同的界面**，
+#     衔接处有 3 个坑：
+#
+#     坑1.「采纳使用」点了之后，**续写弹窗不会自动关**。
+#          弹窗是居中模态，会**截获点击** → 直接点「AI审稿」必然超时。
+#          必须先 `close_continue_dialog()` 把弹窗关掉。
+#
+#     坑2. 采纳后正文写入需要一点时间（编辑器里要渲染出来），
+#          立刻开审稿可能读到空正文 / 旧正文。
+#          必须 `wait_body_change()` 等字数真的变了。
+#
+#     坑3. 审稿抽屉打开后，页面布局变了，但正文还在编辑器里，
+#          所以审稿的「待审文本」会自动带上刚生成的正文 —— 这是我们要的。
+# ================================================================
+
+
 def continue_dialog_open(page: Page) -> bool:
     """续写弹窗是否还开着（★ 以「采纳使用 / 重新生成」按钮为准）。
 
@@ -279,6 +319,8 @@ def continue_dialog_open(page: Page) -> bool:
         except Exception:
             continue
     return False
+
+
 
 def close_continue_dialog(page: Page, wait: float = 1.5,
                           max_try: int = 4) -> bool:

@@ -19,6 +19,8 @@ from xyxbot.ai.selectors import AI_SELECTORS
 
 __all__ = ["accept_result", "gen_dialog_open", "gen_finished", "gen_in_progress", "generate_with_word_check", "get_gen_word_count", "regenerate", "start_generate", "wait_generation", "wait_result_gone"]
 
+
+
 def start_generate(page: Page, wait: float = 2.0) -> bool:
     """点「开始 AI 续写」。
 
@@ -44,12 +46,33 @@ def start_generate(page: Page, wait: float = 2.0) -> bool:
         print("[ai]   （暂未看到生成的启动迹象，继续等待）")
     return True
 
+
+
+# ---------------------------------------------------------------- 生成结果处理
+#
+# ★ 实测（2026-10-03）点「开始 AI 续写」后，会弹出**第二个**弹窗
+#   （标题「AI 续写」，右上角显示「模型: 细腻版」），内容区是个
+#   **`textarea`**，右下角显示本次生成的字数。
+#
+#   底部按钮栏（`.n-card__footer`）：
+#       上一步 | 重新生成 | 继续追问 | 复制 | 对比 | 导出至作品 | 推送至备忘录 | 采纳使用
+#
+#   ★ 字数元素的坑：
+#     弹窗里 `.n-input-word-count` 可能有好几个，比如续写要求输入框上有
+#     `3 / 35`。**生成字数那个挂在 `textarea` 上**，路径是
+#     `.n-modal .n-input--textarea .n-input-word-count`，用这个才准。
+#
+#   ★ 外部还有一个 `.chapter-word-count`（左侧章节字数，如 73），
+#     类名不同，不会误抓。
+
 def gen_dialog_open(page: Page) -> bool:
     """生成结果弹窗是否已出现（以「采纳使用」按钮为准）。"""
     try:
         return bool(page.locator(AI_SELECTORS["btn_accept"][0]).count())
     except Exception:
         return False
+
+
 
 def gen_in_progress(page: Page) -> bool:
     """生成是否**正在进行中**。
@@ -76,6 +99,8 @@ def gen_in_progress(page: Page) -> bool:
         return False
     except Exception:
         return False
+
+
 
 def gen_finished(page: Page) -> bool:
     """生成是否**已完成**（结果页的完整按钮栏已渲染）。
@@ -117,6 +142,8 @@ def gen_finished(page: Page) -> bool:
         return False
     except Exception:
         return False
+
+
 
 def wait_generation(page: Page, timeout: float = 240.0,
                     poll: float = 0.4,
@@ -235,6 +262,8 @@ def wait_generation(page: Page, timeout: float = 240.0,
     print(f"[ai] ✓ 生成完成（约 {int(res.elapsed)}s{extra}）")
     return True
 
+
+
 def wait_result_gone(page: Page, timeout: float = 12.0,
                      poll: float = 0.5) -> bool:
     """等**结果页下架**（「重新生成」按钮消失）→ 说明真的开始新一轮生成了。
@@ -250,6 +279,8 @@ def wait_result_gone(page: Page, timeout: float = 12.0,
         time.sleep(poll)
         waited += poll
     return False
+
+
 
 def get_gen_word_count(page: Page) -> int:
     """读本次生成的字数（右下角那个数字）。
@@ -290,6 +321,8 @@ def get_gen_word_count(page: Page) -> int:
         except Exception:
             continue
     return -1
+
+
 
 def regenerate(page: Page, wait_after: float = 2.0) -> bool:
     """点「重新生成」。
@@ -349,6 +382,9 @@ def regenerate(page: Page, wait_after: float = 2.0) -> bool:
         print("[ai] ✓ 已进入新一轮生成")
     return True
 
+
+
+
 def accept_result(page: Page, wait_after: float = 3.0) -> bool:
     """点「采纳使用」。
 
@@ -379,6 +415,8 @@ def accept_result(page: Page, wait_after: float = 3.0) -> bool:
     else:
         print(f"[ai]   （{res.elapsed:.1f}s 内没等到采纳生效，继续）")
     return True
+
+
 
 def generate_with_word_check(page: Page,
                              min_words: int = 2100,
