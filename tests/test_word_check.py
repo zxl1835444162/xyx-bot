@@ -210,12 +210,12 @@ check_true("ai_batch_chapters 收 max_retry",
 check_true("download 路径 ai_auto_chapter 有 max_retry 形参",
            "max_retry: int = 5" in ai_src)
 
-# main.py 的 CLI 也应当传（别再写死）
-main_code = _real_code("main.py")
-check_true("main.py 真实代码里没有 max_retry=0",
+# CLI（xyxbot/cli.py）也应当传（别再写死）
+main_code = _real_code("xyxbot/cli.py")
+check_true("cli.py 真实代码里没有 max_retry=0",
            "max_retry=0" not in main_code.replace(" ", ""),
            "CLI 那条路径也在写死")
-check_true("main.py CLI 把解析出的 max_retry 传下去",
+check_true("cli.py 把解析出的 max_retry 传下去",
            "max_retry=max_retry" in main_code)
 
 # ============================================ 5. 审稿填写加固

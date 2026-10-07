@@ -84,11 +84,12 @@ jobs:
           import datetime, pathlib, sys
           sha = (sys.argv[1] or "unknown")[:12]
           pathlib.Path("xyxbot/_buildinfo.py").write_text(
-              '"""构建信息（由 CI 自动写入，不要手改）。"""\n\n'
+              '"""构建信息（由 CI 自动写入，不要手改）。\n\n'
+              'VERSION 以 xyxbot/version.py 为唯一真相源，这里只覆盖 SHA / BUILT_AT。\n"""\n\n'
               'from __future__ import annotations\n\n'
+              'from xyxbot.version import VERSION\n\n'
               f'SHA = "{sha}"\n'
-              f'BUILT_AT = "{datetime.datetime.utcnow():%Y-%m-%d %H:%M UTC}"\n'
-              'VERSION = "1.0.0"\n\n\n'
+              f'BUILT_AT = "{datetime.datetime.utcnow():%Y-%m-%d %H:%M UTC}"\n\n\n'
               'def describe() -> str:\n'
               '    return f"v{VERSION} build={SHA} at={BUILT_AT}"\n',
               encoding="utf-8")

@@ -22,10 +22,14 @@ classifiers = [
 dependencies = ["playwright>=1.47.0"]
 
 [project.optional-dependencies]
-# 图形界面还需要 Pillow（截图工具 ui/shot.py 与图标生成 scripts/make_icons.py 用）
+# 图形界面还需要 Pillow（截图工具 xyxbot/ui/shot.py 与图标生成 scripts/make_icons.py 用）
 gui = ["Pillow>=10.0"]
 # CI 里额外装的（工作流脚本用到）
 ci = ["PyYAML"]
+
+[project.scripts]
+# 装成命令之后：`xyxbot selftest` 等价于 `python main.py selftest`
+xyxbot = "xyxbot.cli:main"
 
 [project.urls]
 Repository = "https://github.com/zxl1835444162/xyx-bot"
