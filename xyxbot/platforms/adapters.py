@@ -21,9 +21,9 @@ class XingyuePlatform(BasePlatform):
 
         登录态已保存时，ensure_login 会直接复用，不会要求重新登录。
         """
-        from src import actions as A
-        from src import config as C
-        from src.login import ensure_login
+        from xyxbot import actions as A
+        from xyxbot import config as C
+        from xyxbot.login import ensure_login
 
         if not ensure_login(app):
             print("未登录，终止")

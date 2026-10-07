@@ -123,7 +123,9 @@ def audit_file(path: pathlib.Path) -> list[str]:
 
 def target_files(root: pathlib.Path) -> list[pathlib.Path]:
     got: set[pathlib.Path] = set()
-    for pat in ("src/*.py", "src/**/*.py", "ui/*.py", "ui/**/*.py"):
+    # 业务包改名后（src→xyxbot）界面包在业务包内；保留 ui/ 两条是为了兼容旧布局
+    pkg = "xyxbot" if (root / "xyxbot").is_dir() else "src"
+    for pat in (f"{pkg}/*.py", f"{pkg}/**/*.py", "ui/*.py", "ui/**/*.py"):
         got |= {p for p in root.glob(pat) if p.is_file()}
     return sorted(got)
 
@@ -140,7 +142,7 @@ def main() -> int:
     # ★ 输出被重定向到文件/管道时 Windows 会用 GBK，下面的 ✓ 会让 print
     #   直接抛 UnicodeEncodeError（实测）。先加固编码。
     try:
-        from src.console import enable_utf8
+        from xyxbot.console import enable_utf8
 
         enable_utf8()
     except Exception:

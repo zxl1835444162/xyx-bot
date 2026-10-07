@@ -45,7 +45,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 try:
-    from src.console import enable_utf8
+    from xyxbot.console import enable_utf8
 
     enable_utf8()
 except Exception:

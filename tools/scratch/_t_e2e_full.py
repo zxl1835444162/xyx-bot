@@ -8,9 +8,9 @@
 """
 import sys, os, time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))  # 仓库根
-from src.app import App
-from src import books as B
-from src import ai as AI
+from xyxbot.app import App
+from xyxbot import books as B
+from xyxbot import ai as AI
 
 INSTRUCTION = ("请按爽文节奏审改以下正文，重点检查毒点与逻辑断裂。\n"
                "不要新增剧情，不要改变原有情节走向。")

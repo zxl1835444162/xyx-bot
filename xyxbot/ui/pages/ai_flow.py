@@ -103,8 +103,8 @@ class AiFlowMixin:
 
         def worker():
             try:
-                from src import books as B
-                from src import ai as AI
+                from xyxbot import books as B
+                from xyxbot import ai as AI
                 page = self._ensure_page()   # 复用同一个浏览器页（线程绑定）
 
                 # ★ 必须先打开作品，否则停在首页，找不到「AI续写正文」按钮
@@ -220,8 +220,8 @@ class AiFlowMixin:
 
         def worker():
             try:
-                from src import books as B
-                from src import ai as AI
+                from xyxbot import books as B
+                from xyxbot import ai as AI
                 page = self._ensure_page()   # 复用同一个浏览器页（线程绑定）
 
                 self.after(0, self.log, f"打开作品《{book}》…", "brand")
@@ -369,9 +369,9 @@ class AiFlowMixin:
 
         def worker():
             try:
-                from src import books as B
-                from src import ai as AI
-                from src import login as L
+                from xyxbot import books as B
+                from xyxbot import ai as AI
+                from xyxbot import login as L
                 page = self._ensure_page()
 
                 # ★ 阶段零：流程准备（打开网站 → 保存 cookie/缓存）
@@ -566,7 +566,7 @@ class AiFlowMixin:
             stop_on_fail = False
 
         # ★★ 清掉上一次的「停止」标记 —— 否则新任务一开始就会被立刻中止
-        from src import ai as _AI
+        from xyxbot import ai as _AI
         _AI.clear_cancel()
 
         total = end - start + 1
@@ -579,7 +579,7 @@ class AiFlowMixin:
         self.status.set_status(f"批量跑章 {start}~{end} 执行中…", "warn")
         if hasattr(self, "_run_progress") and hasattr(self, "_run_draw_progress"):
             try:
-                from src.runplan import Progress
+                from xyxbot.runplan import Progress
                 self._run_progress = Progress(total=total)
                 self._run_render_progress()
             except Exception:
@@ -589,9 +589,9 @@ class AiFlowMixin:
 
         def worker():
             try:
-                from src import books as B
-                from src import ai as AI
-                from src import login as L
+                from xyxbot import books as B
+                from xyxbot import ai as AI
+                from xyxbot import login as L
                 page = self._ensure_page()
 
                 # 阶段零：准备
@@ -665,7 +665,7 @@ class AiFlowMixin:
             self._btn_ai_batch.set_text("▶  开始跑章")
         self._run_set_stop_enabled(False)
         try:
-            from src import ai as _AI
+            from xyxbot import ai as _AI
             _AI.clear_cancel()
         except Exception:
             pass
@@ -694,7 +694,7 @@ class AiFlowMixin:
         #    连载场景（今天 3~10、明天 11~20）就不用每次重新算章号了。
         #    取**成功跑完的最高章号**（失败/中止的章不算，那些要重跑）。
         try:
-            from src.workspace import note_batch_run
+            from xyxbot.workspace import note_batch_run
             done_nos = [int(x.get("no") or 0)
                         for x in (r.get("results") or []) if x.get("ok")]
             note_batch_run(max(done_nos) if done_nos else 0, int(total or 0))

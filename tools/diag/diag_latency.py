@@ -33,7 +33,7 @@ sys.path.insert(0, ROOT)
 # ★ 输出被重定向到文件/管道时 Windows 会用 GBK，日志里的 ⚠/✓ 会让
 #   print 直接抛 UnicodeEncodeError（实测）。先加固编码。
 try:
-    from src.console import enable_utf8
+    from xyxbot.console import enable_utf8
 
     enable_utf8()
 except Exception:
@@ -406,10 +406,10 @@ def main() -> int:
     hr("#")
 
     # ---- 装仪表（必须在 import src.ai 之后、跑流程之前）
-    from src import ai as AI
-    from src import books as B
-    from src import login as L
-    from src import waiting as W
+    from xyxbot import ai as AI
+    from xyxbot import books as B
+    from xyxbot import login as L
+    from xyxbot import waiting as W
 
     shim = TimeShim(time)
     AI.time = shim
@@ -451,7 +451,7 @@ def main() -> int:
                 wrap_wait(mod, nm)
 
     # ---- 启动
-    from src.app import App
+    from xyxbot.app import App
 
     t_boot = REAL_PERF()
     app = None

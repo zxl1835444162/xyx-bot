@@ -42,7 +42,7 @@ import _support as S  # noqa: E402  文件布局的唯一接口（见 tests/_sup
 os.environ.setdefault("XYX_NO_DIALOG", "1")
 
 try:
-    from src.console import enable_utf8
+    from xyxbot.console import enable_utf8
 
     enable_utf8()
 except Exception:
@@ -176,7 +176,7 @@ check_true("_beacon 仍然记录启动进度到内存（看门狗能力保留）
 check_true("构建版本仍会带进错误文本（走 stderr）",
            "_buildinfo" in _rg or "describe()" in _rg)
 
-from src import config as C  # noqa: E402
+from xyxbot import config as C  # noqa: E402
 
 # 真跑一次：_beacon 与 _dump_hang 都不该产出任何文件
 _fatal = C.LOGS / "fatal.log"
@@ -332,8 +332,8 @@ threading.Thread(target=watchdog, name="startup-watchdog", daemon=True).start()
 
 import tkinter as tk  # noqa: E402
 
-import ui.main_window as MW  # noqa: E402
-from ui import theme  # noqa: E402
+import xyxbot.ui.main_window as MW  # noqa: E402
+from xyxbot.ui import theme  # noqa: E402
 
 # 数重绘（不依赖定时器）—— 顺手守住渲染风暴
 for _cls in ("BrandButton", "GradientBar", "CheckBox", "StatusBar"):

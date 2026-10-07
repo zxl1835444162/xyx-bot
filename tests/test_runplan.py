@@ -18,7 +18,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 try:
-    from src.console import enable_utf8
+    from xyxbot.console import enable_utf8
 
     enable_utf8()
 except Exception:
@@ -45,7 +45,7 @@ def check_true(name: str, cond, detail: str = ""):
 
 # ==================================================== 1. runplan 进度 / ETA
 print("=== 1. 进度与预计剩余（纯计算） ===")
-from src.runplan import (DEFAULT_SECONDS_PER_CHAPTER, Check, Progress,
+from xyxbot.runplan import (DEFAULT_SECONDS_PER_CHAPTER, Check, Progress,
                          fmt_duration, format_checks, has_blocking_error,
                          next_retry_range, preflight)
 
@@ -209,7 +209,7 @@ check_true("format_checks 每项一行且带图标",
 
 # ==================================================== 3. 协作式中止
 print("\n=== 3. 中止（停止按钮的后端） ===")
-from src.waiting import wait_gone, wait_until
+from xyxbot.waiting import wait_gone, wait_until
 
 flag = {"stop": False}
 t0 = time.time()
@@ -258,7 +258,7 @@ r = wait_until(lambda: True, timeout=1.0, interval=0.05,
 check_true("中止判据抛异常不影响正常命中", r.ok is True)
 
 # --- ai 模块的取消 API
-from src import ai as AI
+from xyxbot import ai as AI
 
 AI.clear_cancel()
 check_true("clear_cancel 后 cancel_requested=False",
@@ -361,7 +361,7 @@ print("\n=== 5. 「上次跑到哪」的记忆（src/workspace.py） ===")
 import pathlib as _pl
 import tempfile
 
-from src import workspace as WS
+from xyxbot import workspace as WS
 
 # ★★ 必须换掉配置文件路径再测 —— 否则会**覆盖用户真实的
 #   artifacts/storage/workspace.json**（里面是他实际的跑章配置）。

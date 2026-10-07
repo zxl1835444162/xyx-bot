@@ -85,7 +85,7 @@ class SetupMixin:
             browser = ""
         if not browser:
             try:
-                from src.browser_detector import BrowserDetector
+                from xyxbot.browser_detector import BrowserDetector
 
                 browser = BrowserDetector.get_recommended_browser() or ""
             except Exception:

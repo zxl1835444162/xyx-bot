@@ -189,7 +189,7 @@ class MainWindow(AboutPage, AccountPage, AiFlowMixin, BooksPage,
           所以位置要夹到当前屏幕内，尺寸也要夹到屏幕大小以内。
         """
         try:
-            from src.workspace import load_ws
+            from xyxbot.workspace import load_ws
             geo = str(load_ws().get("win_geometry") or "").strip()
         except Exception:
             return
@@ -217,7 +217,7 @@ class MainWindow(AboutPage, AccountPage, AiFlowMixin, BooksPage,
     def _save_geometry(self) -> None:
         """记下当前窗口大小/位置。"""
         try:
-            from src.workspace import save_ws
+            from xyxbot.workspace import save_ws
             save_ws(win_geometry=self.winfo_geometry())
         except Exception:
             pass
@@ -632,7 +632,7 @@ class MainWindow(AboutPage, AccountPage, AiFlowMixin, BooksPage,
 
     def _ensure_page(self):
         """确保 App 与浏览器已启动，返回 page（阻塞，供后台线程调用）。"""
-        from src.app import App
+        from xyxbot.app import App
 
         if self._app is None:
             self._app = App(headless=False,
@@ -660,7 +660,7 @@ class MainWindow(AboutPage, AccountPage, AiFlowMixin, BooksPage,
 
     def _task_names(self) -> list[str]:
         try:
-            from src.tasks import list_task_names
+            from xyxbot.tasks import list_task_names
             return list_task_names()
         except Exception:
             return []
@@ -682,7 +682,7 @@ class MainWindow(AboutPage, AccountPage, AiFlowMixin, BooksPage,
 
         def worker():
             try:
-                from src.logging_redirect import LogRedirector
+                from xyxbot.logging_redirect import LogRedirector
 
                 app = self._ensure_app()
 
@@ -727,7 +727,7 @@ class MainWindow(AboutPage, AccountPage, AiFlowMixin, BooksPage,
 
     def _make_app(self):
         """App 工厂（只在常驻 Playwright 线程里被 BrowserSession 调用）。"""
-        from src.app import App
+        from xyxbot.app import App
         return App(headless=False,
                    browser_path=self._browser_path_override())
 

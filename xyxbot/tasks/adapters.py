@@ -15,7 +15,7 @@ def open_studio(app):
 
     有已保存的登录态就直接复用，不会被要求重新登录。
     """
-    from src.platforms import get_platform
+    from xyxbot.platforms import get_platform
 
     plat = get_platform("星月写作")
     return plat.run(app)
@@ -29,8 +29,8 @@ def login_site(app):
     否则等你在浏览器里扫码或输账号密码 —— **不限时**，
     登录好了程序自己会检测到（UI 上也可以点「我已登录，立即保存」）。
     """
-    from src import login as L
-    from src import session as S
+    from xyxbot import login as L
+    from xyxbot import session as S
 
     if S.exists():
         info = S.describe()
@@ -55,7 +55,7 @@ def prepare_session_task(app):
 
     跑完这一次之后，直接点「续写+审稿一条龙」即可，无需重复登录。
     """
-    from src import login as L
+    from xyxbot import login as L
 
     r = L.prepare_session(app, save=True, auto=True,
                           wait_seconds=0, interactive=True)
@@ -67,7 +67,7 @@ def prepare_session_task(app):
 @register_task("校验登录态", threaded=False)
 def check_session(app):
     """打开站点，确认保存的登录态现在还有效。"""
-    from src import login as L
+    from xyxbot import login as L
 
     return L.verify_session(app)
 
@@ -79,7 +79,7 @@ def open_book_task(app):
     ⚠ 作品名可能重复，这里用 ID 精确定位。
     想改名/选别的作品，直接改下面的 BOOK_KEYWORD 即可。
     """
-    from src import books as B
+    from xyxbot import books as B
 
     BOOK_KEYWORD = "新建作品1"     # ← 改这里
     BOOK_INDEX = None             # ← 同名多个时填 0/1/2…
@@ -98,7 +98,7 @@ def create_book(app):
     ⚠ 站点上已有作品可能叫「新建作品」「新建作品1」，
     用文字匹配会误点。这里用 `.create-card` 类精确锁定入口卡。
     """
-    from src import books as B
+    from xyxbot import books as B
 
     page = app.page
     ok = B.create_book(page, title="", book_type="novel", intro="")
@@ -121,8 +121,8 @@ def ai_continue_task(app):
       4. 都不给就用下面的 DEFAULT_PLOT 兜底
     """
     import os
-    from src import books as B
-    from src import ai as AI
+    from xyxbot import books as B
+    from xyxbot import ai as AI
 
     BOOK = os.environ.get("XY_BOOK", "新建作品1")
     MODEL = os.environ.get("XY_MODEL", "细腻版")
@@ -146,7 +146,7 @@ def ai_continue_task(app):
     # ★ 优先：指令模板（短代号 #1 #2 …）
     if not plot and proj_path and template:
         try:
-            from src import novel as N
+            from xyxbot import novel as N
             proj = N.NovelProject.open(proj_path)
             chk = proj.check_template(template)
             if chk["unknown"]:
@@ -165,7 +165,7 @@ def ai_continue_task(app):
     # 次选：单章渲染
     if not plot and proj_path and ch_no:
         try:
-            from src import novel as N
+            from xyxbot import novel as N
             proj = N.NovelProject.open(proj_path)
             ch = proj.find(ch_no)
             if ch:
@@ -225,8 +225,8 @@ def ai_review_task(app):
         XY_RV_TIMEOUT 等生成的最长秒数（默认 600）
     """
     import os
-    from src import books as B
-    from src import ai as AI
+    from xyxbot import books as B
+    from xyxbot import ai as AI
 
     BOOK = os.environ.get("XY_BOOK", "新建作品1")
     MODEL = os.environ.get("XY_RV_MODEL", "智慧版")
@@ -301,8 +301,8 @@ def auto_chapter_task(app):
         XY_AUTO_NO_REPLACE 1 = 审稿后不替换落盘
     """
     import os
-    from src import books as B
-    from src import ai as AI
+    from xyxbot import books as B
+    from xyxbot import ai as AI
 
     BOOK = os.environ.get("XY_BOOK", "新建作品1")
     PLOT = os.environ.get("XY_AUTO_PLOT", "继续推进剧情。")
@@ -363,8 +363,8 @@ def batch_chapters_task(app):
         + 续写/审稿参数同「续写+审稿一条龙」（XY_AUTO_* / XY_RV_*）
     """
     import os
-    from src import books as B
-    from src import ai as AI
+    from xyxbot import books as B
+    from xyxbot import ai as AI
 
     BOOK = os.environ.get("XY_BOOK", "新建作品1")
     START = int(os.environ.get("XY_BATCH_FROM", "1"))
@@ -385,7 +385,7 @@ def batch_chapters_task(app):
 
     plot_for = None
     if not PLOT and PROJ:
-        from src.novel import NovelProject
+        from xyxbot.novel import NovelProject
         proj = NovelProject.open(PROJ)
         tpl = proj.instruction or "#@"
         print(f"[task] 指令模板：{tpl[:50]}…")
@@ -422,7 +422,7 @@ def batch_chapters_task(app):
 @register_task("侦察页面", threaded=False)
 def recon_page(app):
     """打印当前页面的可见交互元素，便于写选择器。"""
-    from src import config as C
+    from xyxbot import config as C
 
     page = app.page
     app.goto(C.SITE["entry"])

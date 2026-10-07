@@ -43,7 +43,7 @@ from ..defaults import (
 from ..theme import (COLOR, F, BrandButton, Card, CheckBox, Collapsible,
                      DarkEntry, DimLabel, TitleLabel, bind_configure,
                      bind_wheel)
-from src.runplan import (Check, Progress, format_checks,
+from xyxbot.runplan import (Check, Progress, format_checks,
                          has_blocking_error, preflight)
 
 # 结果表在没有结果时显示的字
@@ -302,7 +302,7 @@ class RunMixin:
         if lbl is None:
             return
         try:
-            from src.workspace import last_run
+            from xyxbot.workspace import last_run
             r = last_run()
         except Exception:
             r = {"ok": False}
@@ -315,7 +315,7 @@ class RunMixin:
     def _run_continue_last(self):
         """★ 接着上次继续：自动把范围设成「下一段」。"""
         try:
-            from src.workspace import last_run, next_run_range
+            from xyxbot.workspace import last_run, next_run_range
             rng = next_run_range()
             r = last_run()
         except Exception as e:
@@ -984,8 +984,8 @@ class RunMixin:
             return
 
         def worker():
-            from src import books as B
-            from src import ai as AI
+            from xyxbot import books as B
+            from xyxbot import ai as AI
             try:
                 page = self._ensure_page()
             except Exception as e:
@@ -1058,7 +1058,7 @@ class RunMixin:
 
     def _run_stop(self):
         """请求停止：协作式取消，最长一个轮询周期（≤0.25s）生效。"""
-        from src import ai as AI
+        from xyxbot import ai as AI
 
         if not AI.cancel_requested():
             AI.request_cancel()
@@ -1167,7 +1167,7 @@ class RunMixin:
         words = ev.get("words") or 0
         reason = ev.get("reason") or ""
 
-        from src.runplan import fmt_duration
+        from xyxbot.runplan import fmt_duration
         if aborted:
             icon, col, tail = "⏹", COLOR["warning"], "已中止"
         elif ok:
@@ -1228,7 +1228,7 @@ class RunMixin:
             import csv
             from datetime import datetime
 
-            from src import config as C
+            from xyxbot import config as C
 
             out_dir = C.ARTIFACTS / "exports"
             out_dir.mkdir(parents=True, exist_ok=True)
@@ -1267,7 +1267,7 @@ class RunMixin:
         self.status.set_status(f"已复制 {len(failed)} 个失败章号", "ok")
 
     def _run_retry_failed(self):
-        from src.runplan import next_retry_range
+        from xyxbot.runplan import next_retry_range
 
         p = getattr(self, "_run_progress", Progress())
         end = self._run_read_int(self._batch_end_entry, 0)

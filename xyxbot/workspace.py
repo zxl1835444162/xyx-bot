@@ -7,7 +7,7 @@
     很烦。这里把「上次用过的」全部记下来，启动时自动回填。
 
 用法：
-    from src.workspace import load_ws, save_ws
+    from xyxbot.workspace import load_ws, save_ws
 
     ws = load_ws()                       # dict
     ws["novel_path"]                     # 上次的小说 txt
@@ -25,7 +25,7 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from src import config as C
+from xyxbot import config as C
 
 WS_FILE = C.STORAGE / "workspace.json"
 

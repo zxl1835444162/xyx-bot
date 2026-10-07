@@ -24,13 +24,13 @@ _PAGES = [("run", "ui-run"), ("setup", "ui-setup"), ("more", "ui-more")]
 
 def main() -> int:
     try:
-        from src.console import enable_utf8
+        from xyxbot.console import enable_utf8
 
         enable_utf8()
     except Exception:
         pass
 
-    from ui.shot import grab_window, make_dpi_aware
+    from xyxbot.ui.shot import grab_window, make_dpi_aware
 
     make_dpi_aware()
 
@@ -46,7 +46,7 @@ def main() -> int:
               f"{str(e)[:100]}）")
         return 0
 
-    from ui.main_window import MainWindow
+    from xyxbot.ui.main_window import MainWindow
 
     win = MainWindow(username="tester")
     win.geometry("1180x980")

@@ -29,7 +29,7 @@ import _support as S  # noqa: E402  文件布局的唯一接口（见 tests/_sup
 # ★ 输出被重定向到文件/管道时，Windows 会用 GBK，日志里的 ⚠ 会让
 #   print 直接抛 UnicodeEncodeError（实测退出码 1）。先加固编码。
 try:
-    from src.console import enable_utf8
+    from xyxbot.console import enable_utf8
 
     enable_utf8()
 except Exception:
@@ -108,16 +108,16 @@ print("=== 1. 窗口与页面构建 ===")
 import pathlib as _pl
 import tempfile
 
-from src import workspace as _WS
+from xyxbot import workspace as _WS
 
 _WS.WS_FILE = _pl.Path(tempfile.mkdtemp(prefix="xyx-gui-test-")) / "ws.json"
 #   同理，小说「轻量记忆」也不能指到用户真实文件
-from src import config as _C
+from xyxbot import config as _C
 
 _C.LAST_PROJECT = _WS.WS_FILE.parent / "last_project.json"
 
-from ui.defaults import DEFAULT_PAGE, EXTRA_PAGES, NAV_ITEMS, PAGE_ALIASES
-from ui.main_window import MainWindow
+from xyxbot.ui.defaults import DEFAULT_PAGE, EXTRA_PAGES, NAV_ITEMS, PAGE_ALIASES
+from xyxbot.ui.main_window import MainWindow
 
 win = MainWindow(username="tester")
 win.withdraw()
@@ -217,7 +217,7 @@ win._batch_start_entry.set("0")
 win._batch_end_entry.set("0")
 _checks = win._run_local_checks()
 check_true("预检能跑出结果", len(_checks) >= 4, str(len(_checks)))
-from src.runplan import has_blocking_error
+from xyxbot.runplan import has_blocking_error
 check_true("没填作品/范围时预检报阻塞", has_blocking_error(_checks))
 
 # 填好关键项后不该再阻塞
@@ -269,7 +269,7 @@ check("重跑把起始章设成最小失败章", win._batch_start_entry.get(), "
 check("重跑保留原结束章", win._batch_end_entry.get(), "10")
 
 # ★★ 停止按钮真的接到了后端中止开关（不只是画了个按钮）
-from src import ai as _AI
+from xyxbot import ai as _AI
 
 _AI.clear_cancel()
 check_true("起始时没有中止请求", not _AI.cancel_requested())
@@ -290,7 +290,7 @@ win._ai_book_entry.set("")
 win._batch_start_entry.set("0")
 win._batch_end_entry.set("0")
 win._project = None
-from src.novel import NovelProject as _NP, split_novel as _split
+from xyxbot.novel import NovelProject as _NP, split_novel as _split
 
 _missing = win._run_missing()
 check_true("缺作品名/范围/细纲时列出待办", len(_missing) >= 3,
@@ -327,7 +327,7 @@ check_true("待办区给出了「还差」的标题",
 win._ai_book_entry.set("新建作品12")
 
 # ---- 3.2 「接着上次继续」----
-from src.workspace import note_batch_run as _note
+from xyxbot.workspace import note_batch_run as _note
 
 _note(10, 8)                       # 假装上次跑完到第 10 章、共 8 章
 win._refresh_run_last()
@@ -367,7 +367,7 @@ win._run_apply_progress({"no": 4, "ok": False, "words": 0, "elapsed": 61.5,
 check("原始结果数据记了 2 条", len(win._run_results_data), 2)
 
 import csv as _csv
-from src import config as _C
+from xyxbot import config as _C
 
 _ex_dir = _C.ARTIFACTS / "exports"
 _before = set(_ex_dir.glob("跑章结果-*.csv")) if _ex_dir.exists() else set()
@@ -395,7 +395,7 @@ except Exception:
 check_true("复制失败章号到剪贴板（4）", _clip.strip() == "4", repr(_clip))
 
 # ---- 3.5 日志「只看关键节点」过滤 ----
-from ui.theme import LogView as _LV
+from xyxbot.ui.theme import LogView as _LV
 
 _lv = _LV(win, height=3)
 _lv.log("切换页面：跑章", "info")          # 噪音
@@ -439,7 +439,7 @@ check_true("准备页：能刷新状态",
 
 win.show_page("more")
 check_true("更多页：列出旧页面入口", hasattr(win, "_page_more"))
-from ui.pages.more import MORE_ITEMS
+from xyxbot.ui.pages.more import MORE_ITEMS
 check_true("更多页至少 6 个入口", len(MORE_ITEMS) >= 6, str(len(MORE_ITEMS)))
 _names = {k for k, _t, _d in MORE_ITEMS}
 check_true("更多页能进概览", "overview" in _names)
@@ -463,7 +463,7 @@ check_true("settings: 浏览器路径输入框", hasattr(win, "_browser_entry"))
 
 # ==================================================== 6. mixin 归属
 print("\n=== 5. 页面代码确实已拆出（mixin 归属） ===")
-from ui.pages import (AboutPage, AccountPage, AiFlowMixin, BooksPage,
+from xyxbot.ui.pages import (AboutPage, AccountPage, AiFlowMixin, BooksPage,
                       ChaptersMixin, ConfigIOMixin, MorePage, OverviewPage,
                       RunMixin, SettingsPage, SetupMixin, TasksPage)
 
@@ -525,7 +525,7 @@ for n in KEPT:
 
 # ==================================================== 6. 核心逻辑
 print("\n=== 7. 分章 / 指令模板 / 细纲 核心逻辑 ===")
-from src.novel import NovelProject, split_novel
+from xyxbot.novel import NovelProject, split_novel
 
 win.show_page("run")
 proj = NovelProject(name="t", chapters=split_novel(
@@ -590,7 +590,7 @@ check("控件销毁后仍可读（持久字段）",
 print("\n=== 9. 记忆功能：存了之后能恢复回来 ===")
 
 # ---- 9.1 界面/环境类字段：写进 workspace → _restore_ws 应用 ----
-from src.workspace import save_ws as _save_ws_raw
+from xyxbot.workspace import save_ws as _save_ws_raw
 
 _save_ws_raw(book_name="记忆测试作品", book_index="1",
              browser_path=r"C:\x\msedge.exe",

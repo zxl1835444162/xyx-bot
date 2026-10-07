@@ -43,7 +43,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 try:
-    from src.console import enable_utf8
+    from xyxbot.console import enable_utf8
 
     enable_utf8()
 except Exception:
@@ -116,8 +116,8 @@ section("1. 主窗口 + 9 个页面构建")
 
 import tkinter as tk  # noqa: E402
 
-from ui.defaults import DEFAULT_PAGE, EXTRA_PAGES, NAV_ITEMS  # noqa: E402
-from ui.main_window import MainWindow  # noqa: E402
+from xyxbot.ui.defaults import DEFAULT_PAGE, EXTRA_PAGES, NAV_ITEMS  # noqa: E402
+from xyxbot.ui.main_window import MainWindow  # noqa: E402
 
 ALL_KEYS = [k for k, _i, _l in NAV_ITEMS] + list(EXTRA_PAGES.keys())
 print(f"  待验证页面（{len(ALL_KEYS)} 个）：{ALL_KEYS}")

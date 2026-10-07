@@ -30,18 +30,18 @@ import sys
 # ★★ 必须在任何 print 之前执行：Windows 上输出被重定向到文件/管道时，
 #   Python 会用系统代码页(GBK)，而日志里的 ⚠/✓ 不在 GBK 里 →
 #   `python main.py batch > log.txt` 会直接崩掉（实测）。
-from src.console import enable_utf8
+from xyxbot.console import enable_utf8
 
 enable_utf8()
 
-from src import config as C
+from xyxbot import config as C
 
 
 # ---------------------------------------------------------------- 命令实现
 
 def cmd_login() -> None:
-    from src.app import App
-    from src.login import ensure_login
+    from xyxbot.app import App
+    from xyxbot.login import ensure_login
 
     with App(headless=False) as app:
         ok = ensure_login(app)
@@ -51,7 +51,7 @@ def cmd_login() -> None:
 
 def cmd_session() -> None:
     """查看登录态详情。"""
-    from src import session as S
+    from xyxbot import session as S
 
     if not S.exists():
         print("尚未保存登录态。执行 `python main.py login` 登录一次即可。")
@@ -70,8 +70,8 @@ def cmd_session() -> None:
 
 
 def cmd_check() -> None:
-    from src.app import App
-    from src import login as L
+    from xyxbot.app import App
+    from xyxbot import login as L
 
     with App(headless=False) as app:
         ok = L.verify_session(app)
@@ -79,21 +79,21 @@ def cmd_check() -> None:
 
 
 def cmd_recon() -> None:
-    from src.app import App
+    from xyxbot.app import App
 
     with App(headless=False) as app:
         app.run_task("侦察页面")
 
 
 def cmd_logout() -> None:
-    from src import session as S
+    from xyxbot import session as S
 
     S.clear()
     print("[login] 本地登录态已清除，下次使用需重新登录")
 
 
 def cmd_tasks() -> None:
-    from src.tasks import list_task_names
+    from xyxbot.tasks import list_task_names
 
     print("已注册任务：")
     for n in list_task_names():
@@ -101,7 +101,7 @@ def cmd_tasks() -> None:
 
 
 def cmd_platforms() -> None:
-    from src.platforms import all_platforms
+    from xyxbot.platforms import all_platforms
 
     print("已注册平台：")
     for name, p in all_platforms().items():
@@ -115,7 +115,7 @@ def cmd_run() -> None:
         print("用法: python main.py run <任务名>")
         print("可用任务见: python main.py tasks")
         sys.exit(1)
-    from src.app import App
+    from xyxbot.app import App
 
     with App(headless=False) as app:
         ok = app.run_task(sys.argv[2])
@@ -123,22 +123,22 @@ def cmd_run() -> None:
 
 
 def cmd_studio() -> None:
-    from src.app import App
+    from xyxbot.app import App
 
     with App(headless=False) as app:
         app.run_platform("星月写作")
 
 
 def cmd_browsers() -> None:
-    from src.browser_detector import test_browser_detection
+    from xyxbot.browser_detector import test_browser_detection
 
     test_browser_detection()
 
 
 def cmd_books() -> None:
     """列出作品页上的所有作品（带 ID，用于确认定位依据）。"""
-    from src.app import App
-    from src import books as B
+    from xyxbot.app import App
+    from xyxbot import books as B
 
     with App(headless=False) as app:
         page = app.page
@@ -178,8 +178,8 @@ def cmd_open() -> None:
             print("✗ --index 后面要跟一个整数")
             sys.exit(1)
 
-    from src.app import App
-    from src import books as B
+    from xyxbot.app import App
+    from xyxbot import books as B
 
     with App(headless=False) as app:
         ok = B.open_book(app.page, kw, index=idx, console_pick=(idx is None))
@@ -259,7 +259,7 @@ def cmd_ai() -> None:
 
     # ★ 优先：--template（短代号指令模板）
     if not plot and project and template:
-        from src import novel as N
+        from xyxbot import novel as N
         proj = N.NovelProject.open(project)
         chk = proj.check_template(template)
         if chk["unknown"]:
@@ -275,16 +275,16 @@ def cmd_ai() -> None:
         print(f"[ai] 指令模板 {used} → {len(plot)} 字")
     # 次选：--chapter N（单章渲染）
     elif not plot and project and chapter:
-        from src import novel as N
+        from xyxbot import novel as N
         proj = N.NovelProject.open(project)
         c = proj.find(chapter)
         if c:
             plot = proj.render(c)
             print(f"[ai] 取自工程 {c.code}，共 {len(plot)} 字")
 
-    from src.app import App
-    from src import books as B
-    from src import ai as AI
+    from xyxbot.app import App
+    from xyxbot import books as B
+    from xyxbot import ai as AI
 
     with App(headless=False) as app:
         if not B.open_book(app.page, book, console_pick=(idx is None),
@@ -362,9 +362,9 @@ def cmd_review() -> None:
     ix = _val("--index", "")
     idx = int(ix) if ix and ix.lstrip("-").isdigit() else None
 
-    from src.app import App
-    from src import books as B
-    from src import ai as AI
+    from xyxbot.app import App
+    from xyxbot import books as B
+    from xyxbot import ai as AI
 
     with App(headless=False) as app:
         if not B.open_book(app.page, book, console_pick=(idx is None),
@@ -451,10 +451,10 @@ def cmd_auto() -> None:
     do_prepare = "--prepare" in args
     no_prepare = "--no-prepare" in args
 
-    from src.app import App
-    from src import books as B
-    from src import ai as AI
-    from src import login as L
+    from xyxbot.app import App
+    from xyxbot import books as B
+    from xyxbot import ai as AI
+    from xyxbot import login as L
 
     with App(headless=False) as app:
         # ===== ★ 阶段 0：流程准备（一条龙之前）=====
@@ -557,15 +557,15 @@ def cmd_batch() -> None:
     rv_instr = _val("--rv-instruction", "")
     rv_timeout = _int("--rv-timeout", 600)
 
-    from src.app import App
-    from src import books as B
-    from src import ai as AI
-    from src import login as L
+    from xyxbot.app import App
+    from xyxbot import books as B
+    from xyxbot import ai as AI
+    from xyxbot import login as L
 
     # ★ 指令模板渲染来源
     plot_for = None
     if not plot and project_path:
-        from src.novel import NovelProject
+        from xyxbot.novel import NovelProject
         proj = NovelProject.open(project_path)
         tpl = proj.instruction or "#@"
         has_cur = bool(proj.CUR_RE.search(tpl))
@@ -625,16 +625,16 @@ def cmd_prepare() -> None:
         - 一条龙 `auto` 默认会先做这一步（可用 --no-prepare 跳过）
     """
     args = sys.argv[2:]
-    from src import login as L
+    from xyxbot import login as L
 
     if "--clear" in args:
-        from src import session as S
+        from xyxbot import session as S
 
         S.clear()
         print("[prepare] 已清除登录态")
         return
 
-    from src.app import App
+    from xyxbot.app import App
 
     with App(headless=False) as app:
         r = L.prepare_session(
@@ -663,7 +663,7 @@ def cmd_selftest() -> None:
     `--window`    强制做「窗口真的显示出来了吗」的探测（会显示窗口）
     `--no-window` 强制不做（CI 环境自动关闭）
     """
-    from src.selftest import run_selftest
+    from xyxbot.selftest import run_selftest
 
     wp = None
     if "--window" in sys.argv:
@@ -677,7 +677,7 @@ def cmd_diag() -> None:
     """诊断登录态：排查「为什么没记录到 cookie」。"""
     import runpy
 
-    from src import config as C
+    from xyxbot import config as C
 
     # ★ 打包（.app / .exe）之后，开发期脚本没被打进去，直接 run_path 会报
     #   FileNotFoundError。这里先说清楚。

@@ -24,7 +24,7 @@ import _support as S  # noqa: E402  文件布局的唯一接口（见 tests/_sup
 # ★ 输出被重定向到文件/管道时，Windows 会用 GBK，日志里的 ⚠ 会让
 #   print 直接抛 UnicodeEncodeError（实测退出码 1）。先加固编码。
 try:
-    from src.console import enable_utf8
+    from xyxbot.console import enable_utf8
 
     enable_utf8()
 except Exception:
@@ -51,7 +51,7 @@ def check_true(name: str, cond, detail: str = ""):
 
 # ==================================================== A. 等待语义
 print("=== A. waiting.py 语义 ===")
-from src.waiting import (WaitResult, poll_interval, wait_gone, wait_hidden,
+from xyxbot.waiting import (WaitResult, poll_interval, wait_gone, wait_hidden,
                          wait_until, wait_visible)
 
 # A1 条件早就成立 → 必须立刻返回（不能有固定最小等待）
@@ -222,7 +222,7 @@ for fn, limit in EXPECT.items():
 
 # 轮询间隔必须已经收紧
 import inspect
-from src import ai as AI
+from xyxbot import ai as AI
 
 _wg_poll = AI.wait_generation.__defaults__[1]
 _wr_poll = AI.wait_review_done.__defaults__[1]

@@ -31,7 +31,7 @@ sys.path.insert(0, str(ROOT))
 import _support as S  # noqa: E402  文件布局的唯一接口（见 tests/_support.py）
 
 try:
-    from src.console import enable_utf8
+    from xyxbot.console import enable_utf8
 
     enable_utf8()
 except Exception:
@@ -74,7 +74,7 @@ WINDOWS_ONLY_MARKERS = [
 ]
 
 for p in SRC_FILES:
-    rel = p.relative_to(ROOT).as_posix()
+    rel = S.legacy_rel(p)
     text = p.read_text(encoding="utf-8")
     hits = [m for m in WINDOWS_ONLY_MARKERS if m in text]
     if not hits:
@@ -91,7 +91,7 @@ for p in SRC_FILES:
 C_DRIVE = re.compile(r"[A-Za-z]:\\\\(?:Program|Users|Windows|Python)")
 offenders = []
 for p in SRC_FILES:
-    rel = p.relative_to(ROOT).as_posix()
+    rel = S.legacy_rel(p)
     if rel == "src/browser_detector.py":
         continue                      # Windows 注册表/默认路径表的归属地
     try:
@@ -146,7 +146,7 @@ MUST_EXIST = [
     "src/selftest.py",
 ]
 for rel in MUST_EXIST:
-    check_true(f"存在 {rel}", (ROOT / rel).exists())
+    check_true(f"存在 {rel}", S.resolve_legacy(rel).exists())
 
 # ---- PyInstaller spec 必须是合法 Python，且入口/数据目录处理正确 ----
 _spec_path = ROOT / "packaging" / "macos" / "xyxbot.spec"
@@ -276,8 +276,8 @@ check_true("requirements-gui.txt 声明了 Pillow（原来用到了但没声明�
 # ==================================================== B. 平台分支逻辑
 print("\n=== B. 平台相关分支：真的调用一遍（假装在 macOS 上） ===")
 
-from src import browser as B  # noqa: E402
-from src import config as C  # noqa: E402
+from xyxbot import browser as B  # noqa: E402
+from xyxbot import config as C  # noqa: E402
 
 _real_platform = sys.platform
 
@@ -367,7 +367,7 @@ finally:
     os.environ.pop("XYX_DATA_DIR", None)
 
 # ---- 自检本身要能跑，且判定为"可以启动" ----
-from src.selftest import collect_facts, run_selftest  # noqa: E402
+from xyxbot.selftest import collect_facts, run_selftest  # noqa: E402
 
 facts = collect_facts()
 for key in ("platform", "arch", "python", "frozen", "tkinter_ok",
@@ -537,7 +537,7 @@ except ImportError:
 # 界面里 8/9/10pt 占绝大多数，macOS 上渲染偏小。
 # 修法是在 theme 里集中做**平台字号缩放**（macOS ×1.3）。
 # 这里锁住"这个机制必须存在且方向正确"。
-from ui import theme as _theme  # noqa: E402
+from xyxbot.ui import theme as _theme  # noqa: E402
 
 check_true("theme 暴露 font_scale()", callable(getattr(_theme, "font_scale", None)))
 check_true("theme 暴露 _scale_size()",
@@ -637,7 +637,7 @@ check_true("wheel_units 处理了 Linux 的 Button-4/5",
 # 用户反馈（2026-10-04）：「分章功能分不出来，太草台班子，我要**通用**的」。
 # 根因：行首空白类只有 `[ \t]`，不含**全角空格 U+3000**（中文小说极常见）。
 # 这里做一条最便宜的静态兜底；完整用例见 tests/test_novel_split.py。
-from src.novel import CHAPTER_RE as _CRE  # noqa: E402
+from xyxbot.novel import CHAPTER_RE as _CRE  # noqa: E402
 
 check_true("分章正则的行首空白含全角空格 U+3000",
            "\\u3000" in _CRE.pattern, _CRE.pattern[:70])

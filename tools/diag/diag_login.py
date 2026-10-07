@@ -25,9 +25,9 @@ ROOT = Path(__file__).resolve().parents[2]  # 仓库根（tools/<组>/ -> tools 
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src import config as C
-from src import session as S
-from src.browser import open_browser
+from xyxbot import config as C
+from xyxbot import session as S
+from xyxbot.browser import open_browser
 
 
 def line(title: str = ""):
@@ -105,7 +105,7 @@ def main():
             print(f"  读取失败: {e}")
 
         line("6. 判定结果")
-        from src import login as L
+        from xyxbot import login as L
 
         print("  " + L.login_state_report(page).replace("\n", "\n  "))
         print(f"  is_login_page: {L.is_login_page(page)}")

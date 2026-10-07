@@ -17,21 +17,21 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]  # 仓库根
 sys.path.insert(0, str(ROOT))
 
 try:
-    from src.console import enable_utf8
+    from xyxbot.console import enable_utf8
 
     enable_utf8()
 except Exception:
     pass
 
 TMP = pathlib.Path(os.environ["XYX_MEM_TMP"])
-import src.config as C  # noqa: E402
+import xyxbot.config as C  # noqa: E402
 
 C.LAST_PROJECT = TMP / "last_project.json"
-from src import workspace as WS  # noqa: E402
+from xyxbot import workspace as WS  # noqa: E402
 
 WS.WS_FILE = TMP / "workspace.json"
 
-from src.novel import NovelProject  # noqa: E402
+from xyxbot.novel import NovelProject  # noqa: E402
 
 TXT = pathlib.Path(r"C:\Users\Administrator\Desktop"
                    r"\开局被绿，我直播捉奸震惊全网.txt")

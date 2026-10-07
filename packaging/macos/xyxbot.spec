@@ -64,8 +64,8 @@ for _pkg in ("playwright",):
     hiddenimports += h
 
 # ---- 本项目自己的包：注册表/适配器是动态 import 的，必须显式收集 ----
-for _pkg in ("src", "ui"):
-    hiddenimports += collect_submodules(_pkg)
+# 界面包在业务包内（xyxbot/ui），collect_submodules 会把子包一起收进来
+hiddenimports += collect_submodules("xyxbot")
 
 a = Analysis(
     [os.path.join(ROOT, "run_gui.py")],

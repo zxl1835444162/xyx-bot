@@ -41,7 +41,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 try:
-    from src.console import enable_utf8
+    from xyxbot.console import enable_utf8
 
     enable_utf8()
 except Exception:
@@ -106,7 +106,7 @@ for f in list(fams)[:30]:
 
 # ------------------------------------------------------------ 候选命中
 print("\n--- 4) ui.theme 的候选命中情况 ---")
-from ui import theme  # noqa: E402
+from xyxbot.ui import theme  # noqa: E402
 
 plat = theme._platform_key()
 for label, cands in (("界面", theme.UI_FONT_CANDIDATES[plat]),

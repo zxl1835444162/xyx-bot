@@ -108,7 +108,7 @@ def collect_facts() -> dict:
 
     # ---- 数据目录（登录态/配置/细纲都写这里）----
     try:
-        from src import config as C
+        from xyxbot import config as C
 
         f["data_root"] = str(C.STORAGE.parent)
         probe = C.STORAGE / ".selftest-write-probe"
@@ -149,7 +149,7 @@ def collect_facts() -> dict:
 
     # ---- 浏览器内核（缺失只是警告）----
     try:
-        from src.browser_detector import BrowserDetector
+        from xyxbot.browser_detector import BrowserDetector
 
         path = BrowserDetector.get_recommended_browser()
         f["browser_path"] = path or ""
@@ -167,7 +167,7 @@ def collect_facts() -> dict:
 
     # ---- 字体：中文 Mac 上最容易出问题、也最难远程排查的一项 ----
     try:
-        from ui.theme import font_report
+        from xyxbot.ui.theme import font_report
 
         f["font"] = font_report()
         fr = f["font"]
@@ -189,7 +189,7 @@ def collect_facts() -> dict:
 
     # ---- 登录态（只是信息）----
     try:
-        from src import session as S
+        from xyxbot import session as S
 
         d = S.describe()
         f["session_ok"] = bool(d.get("saved"))
@@ -287,7 +287,7 @@ def _screencapture(name: str) -> str | None:
     try:
         import subprocess
 
-        from src import config as C
+        from xyxbot import config as C
 
         p = C.SHOTS / name
         r = subprocess.run(["screencapture", "-x", str(p)],
@@ -377,7 +377,7 @@ def smoke_main_window(verbose: bool = True,
     # ---- [1] 构造主窗口 + 构建所有页面（不显示窗口，任何环境都安全）----
     _out(f"  [1/{n_steps}] 构造主窗口，并逐个构建 9 个页面 …")
     try:
-        from ui.main_window import MainWindow
+        from xyxbot.ui.main_window import MainWindow
 
         win = MainWindow(root, username="selftest")
         win.withdraw()          # 这一步只验证"能不能构造"，不需要显示
@@ -410,7 +410,7 @@ def smoke_main_window(verbose: bool = True,
     if window_probe:
         _out("  [2/3] 用 update() 泵事件，检查主窗口是否真的显示出来 …")
         try:
-            from ui.main_window import MainWindow
+            from xyxbot.ui.main_window import MainWindow
 
             win = MainWindow(root, username="selftest")
             probe = _probe_window(win)
@@ -481,7 +481,7 @@ def smoke_main_window(verbose: bool = True,
     label = "[3/3]" if window_probe else "[2/2]"
     _out(f"  {label} 关窗后事件循环要能正常收尾 …")
     try:
-        from ui.main_window import MainWindow
+        from xyxbot.ui.main_window import MainWindow
 
         flag: dict = {}
         win2 = MainWindow(root, username="selftest",
@@ -536,7 +536,7 @@ def run_selftest(verbose: bool = True, smoke_ui: bool = False,
         print(_line("运行方式",
                     "打包版（.app/.exe）" if f["frozen"] else "源码运行"))
         try:
-            from src import _buildinfo as _B
+            from xyxbot import _buildinfo as _B
 
             print(_line("构建版本", _B.describe()))
         except Exception:

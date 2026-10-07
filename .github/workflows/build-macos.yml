@@ -83,7 +83,7 @@ jobs:
           python - "$GITHUB_SHA" <<'PY'
           import datetime, pathlib, sys
           sha = (sys.argv[1] or "unknown")[:12]
-          pathlib.Path("src/_buildinfo.py").write_text(
+          pathlib.Path("xyxbot/_buildinfo.py").write_text(
               '"""构建信息（由 CI 自动写入，不要手改）。"""\n\n'
               'from __future__ import annotations\n\n'
               f'SHA = "{sha}"\n'
@@ -92,7 +92,7 @@ jobs:
               'def describe() -> str:\n'
               '    return f"v{VERSION} build={SHA} at={BUILT_AT}"\n',
               encoding="utf-8")
-          print(pathlib.Path("src/_buildinfo.py").read_text(encoding="utf-8"))
+          print(pathlib.Path("xyxbot/_buildinfo.py").read_text(encoding="utf-8"))
           PY
 
       - name: PyInstaller 打包

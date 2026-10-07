@@ -62,12 +62,33 @@ def resolve_legacy(rel: str) -> Path:
     （那时业务包叫 `src`、界面是平级的 `ui`）。有了这个函数，测试照旧写老路径
     也能读到文件，改名的成本就从"18 处调用点"降到"这一处映射"。
     """
-    rel = str(rel).replace("\\", "/").lstrip("./")
+    rel = str(rel).replace("\\", "/")
+    if rel.startswith("./"):
+        rel = rel[2:]
     if rel.startswith("src/"):
         return pkg_file(*rel[len("src/"):].split("/"))
     if rel.startswith("ui/"):
         return ui_file(*rel[len("ui/"):].split("/"))
     return ROOT / rel
+
+
+def legacy_rel(path) -> str:
+    """把真实路径转回**重构前的叫法**（`src/x.py` / `ui/x.py`）。
+
+    resolve_legacy 是"旧写法 → 真实路径"，这个是反向的。测试里那些按旧相对路径
+    做键和比较的地方（例如 ALLOW_WINDOWS_ONLY 字典、`rel == "ui/theme.py"`）
+    靠它继续生效 —— 改了包名也不用重写这些历史断言。
+    """
+    p = Path(path).resolve()
+    for base, prefix in ((UI, "ui"), (PKG, "src")):
+        try:
+            return f"{prefix}/{p.relative_to(base).as_posix()}"
+        except ValueError:
+            continue
+    try:
+        return p.relative_to(ROOT).as_posix()
+    except ValueError:
+        return p.as_posix()
 
 
 def read_if_exists(path: Path, default: str = "") -> str:
@@ -86,8 +107,12 @@ def ui_py_files():
 
 
 def all_source_files():
-    """业务包 + 界面（旧测试里到处在拼这个列表）。"""
-    return [*ui_py_files(), *pkg_py_files()]
+    """业务包 + 界面里所有 .py。
+
+    用集合去重：界面包收进业务包（xyxbot/ui）之后，`pkg_py_files()` 已经包含它，
+    不去重会让共用的静态审计把同一批文件跑两遍（断言数量也会虚高）。
+    """
+    return sorted({*ui_py_files(), *pkg_py_files()})
 
 
 def add_tools_to_path() -> None:

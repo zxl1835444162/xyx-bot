@@ -30,7 +30,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 try:
-    from src.console import enable_utf8
+    from xyxbot.console import enable_utf8
 
     enable_utf8()
 except Exception:
@@ -55,7 +55,7 @@ def check_true(name: str, cond, detail: str = ""):
         print(f"         {detail}")
 
 
-from src.novel import (  # noqa: E402
+from xyxbot.novel import (  # noqa: E402
     CHAPTER_RE, SPECIAL_RE, cn_to_int, split_novel,
 )
 

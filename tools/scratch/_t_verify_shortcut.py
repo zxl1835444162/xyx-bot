@@ -2,9 +2,9 @@
 """验证 ai_auto_chapter 带 shortcut 时，续写阶段能否选中「快捷选项」提示词"""
 import sys, os, time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))  # 仓库根
-from src.app import App
-from src import books as B
-from src import ai as AI
+from xyxbot.app import App
+from xyxbot import books as B
+from xyxbot import ai as AI
 
 with App(headless=False) as app:
     page = app.page

@@ -72,7 +72,7 @@ class SettingsPage:
     def _detect_browser(self):
         """自动检测本机 Edge/Chrome，并把结果写进输入框与持久字段。"""
         try:
-            from src.browser_detector import BrowserDetector
+            from xyxbot.browser_detector import BrowserDetector
             path = BrowserDetector.get_recommended_browser()
             if path:
                 self._browser_entry.set(path)

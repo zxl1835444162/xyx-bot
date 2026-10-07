@@ -36,7 +36,7 @@ class ConfigIOMixin:
           但缺了也不该抛异常）。
         """
         try:
-            from src.workspace import load_ws
+            from xyxbot.workspace import load_ws
             ws = load_ws()
         except Exception:
             return
@@ -190,7 +190,7 @@ class ConfigIOMixin:
         for w in self._hist_box.winfo_children():
             w.destroy()
         try:
-            from src.workspace import load_ws
+            from xyxbot.workspace import load_ws
             hist = load_ws().get("history", [])
         except Exception:
             hist = []
@@ -260,7 +260,7 @@ class ConfigIOMixin:
     def _save_ws(self, silent: bool = False):
         """保存当前界面配置（分章成功、点一键续写时自动调用）。"""
         try:
-            from src.workspace import save_from_ui
+            from xyxbot.workspace import save_from_ui
             d = self._collect_ws()
             save_from_ui(**d)
             # ★ 顺带把「上次载入的小说」（细纲/模板）也存一份轻量记忆，

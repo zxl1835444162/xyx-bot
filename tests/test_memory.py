@@ -30,7 +30,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 try:
-    from src.console import enable_utf8
+    from xyxbot.console import enable_utf8
 
     enable_utf8()
 except Exception:
@@ -60,15 +60,15 @@ TMP = pathlib.Path(tempfile.mkdtemp(prefix="xyx-memory-test-"))
 # ★★ 把两个持久化文件都指到临时目录 ——
 #   `artifacts/storage/workspace.json` 与 `last_project.json` 里是**用户真实数据**，
 #   测试绝不能写它们。
-import src.config as C  # noqa: E402
+import xyxbot.config as C  # noqa: E402
 
 C.LAST_PROJECT = TMP / "last_project.json"
 
-from src import workspace as WS  # noqa: E402
+from xyxbot import workspace as WS  # noqa: E402
 
 WS.WS_FILE = TMP / "workspace.json"
 
-from src.novel import NovelProject, split_novel  # noqa: E402
+from xyxbot.novel import NovelProject, split_novel  # noqa: E402
 
 # ---------------------------------------------------------------- 造一份小说
 TXT = TMP / "测试小说.txt"
@@ -152,7 +152,7 @@ _p = NovelProject.restore_sidecar(_extra)
 check_true("多余章号的细纲被安全跳过", _p is not None and _p.find(2).note == "有效")
 
 print("\n=== 4. 界面/环境类的记忆（workspace.json） ===")
-from src.workspace import load_ws, save_from_ui  # noqa: E402
+from xyxbot.workspace import load_ws, save_from_ui  # noqa: E402
 
 save_from_ui(book_name="新建作品12", shortcut="强盛集团云霄",
              instruction="约束…#@",
@@ -173,7 +173,7 @@ check("★ 日志「只看关键节点」记住", _ws["log_key_only"], True)
 check("★ 单章「自动关弹窗」记住", _ws["auto_both_close"], False)
 
 # 窗口几何
-from src.workspace import save_ws  # noqa: E402
+from xyxbot.workspace import save_ws  # noqa: E402
 
 save_ws(win_geometry="1180x980+320+140")
 check("★ 窗口大小/位置记住", load_ws()["win_geometry"], "1180x980+320+140")
@@ -191,7 +191,7 @@ check("旧配置缺 browser_path 时用默认空串", _old["browser_path"], "")
 WS.WS_FILE = _old_backup
 
 # 「上次跑到哪」和这次新增的记忆互不干扰
-from src.workspace import last_run, note_batch_run, next_run_range  # noqa: E402
+from xyxbot.workspace import last_run, note_batch_run, next_run_range  # noqa: E402
 
 note_batch_run(15, 8)
 check("上次跑到第15章", last_run()["done"], 15)

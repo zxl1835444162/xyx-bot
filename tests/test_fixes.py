@@ -24,11 +24,12 @@ import time
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+import _support as S  # noqa: E402  文件布局的唯一接口（见 tests/_support.py）
 
 # ★ 输出被重定向到文件/管道时，Windows 会用 GBK，日志里的 ⚠ 会让
 #   print 直接抛 UnicodeEncodeError（实测退出码 1）。先加固编码。
 try:
-    from src.console import enable_utf8
+    from xyxbot.console import enable_utf8
 
     enable_utf8()
 except Exception:
@@ -55,7 +56,7 @@ def check_true(name: str, cond, detail: str = ""):
 
 # ============================================================ 1. BrowserSession
 print("\n=== 1. BrowserSession（线程模型 / 互斥 / 停止） ===")
-from ui.browser_session import BrowserSession
+from xyxbot.ui.browser_session import BrowserSession
 
 logs: list[tuple] = []
 sess = BrowserSession(log=lambda m, lv="info": logs.append((m, lv)))
@@ -155,7 +156,7 @@ print("\n=== 2. theme.BrandButton 禁用生效 ===")
 import tkinter as tk
 import types
 
-from ui.theme import BrandButton
+from xyxbot.ui.theme import BrandButton
 
 
 def _has_display() -> bool:
@@ -206,7 +207,7 @@ if _has_display():
 
 # ============================================================ 3. novel 渲染
 print("\n=== 3. src.novel 的 #@ 与未知代号 ===")
-from src.novel import NovelProject, split_novel
+from xyxbot.novel import NovelProject, split_novel
 
 TXT = "第1章 a\n正文一。\n第2章 b\n正文二。\n第3章 c\n正文三。\n"
 proj = NovelProject(name="t", chapters=split_novel(TXT))
@@ -238,7 +239,7 @@ check_true("with #@: #@ current", "细纲三" in out4, out4)
 
 # ============================================================ 4. login URL 判据
 print("\n=== 4. src.login 的 URL 兜底判据 ===")
-from src.login import _is_site_url
+from xyxbot.login import _is_site_url
 
 check("about:blank rejected", _is_site_url("about:blank"), False)
 check("chrome-error rejected", _is_site_url("chrome-error://x/"), False)
@@ -252,7 +253,7 @@ check("other domain rejected", _is_site_url("https://example.com/"), False)
 print("\n=== 5. src.browser 的 slow_mo 接线 ===")
 import inspect
 
-from src import browser as B
+from xyxbot import browser as B
 
 check_true("slow_mo passed to launch",
            "slow_mo=C.SLOW_MO" in inspect.getsource(B.open_browser))
@@ -261,7 +262,7 @@ check_true("slow_mo passed to launch",
 print("\n=== 5b. src.logging_redirect（线程安全 / 行完整性） ===")
 import tempfile
 
-from src.logging_redirect import LogRedirector
+from xyxbot.logging_redirect import LogRedirector
 
 # 基础三路分发，且 sink 不该收到空行
 _lf = pathlib.Path(tempfile.mkdtemp()) / "a.log"
@@ -324,7 +325,7 @@ check("无 log_file 不抛异常", True, True)
 
 # ============================================================ 6. ai 返回契约
 print("\n=== 6. src.ai 的 ai_auto_chapter 返回契约 ===")
-from src import ai as AI
+from xyxbot import ai as AI
 
 src_auto = inspect.getsource(AI.ai_auto_chapter)
 src_batch = inspect.getsource(AI.ai_batch_chapters)
@@ -391,13 +392,13 @@ if state_file.exists():
     # 源码里确实包含 userStorage 候选键
     check_true("session.py scans userStorage",
                "userStorage" in inspect.getsource(__import__(
-                   "src.session", fromlist=["x"])._guess_account))
+                   f"{S.PKG_NAME}.session", fromlist=["x"])._guess_account))
 else:
     print("  [SKIP] 没有 state.json")
 
 # ============================================================ 8. detector 缓存
 print("\n=== 8. src.browser_detector 缓存与去重 ===")
-from src.browser_detector import BrowserDetector as BD
+from xyxbot.browser_detector import BrowserDetector as BD
 
 BD._cache = None
 d1 = BD.detect_all_browsers(use_cache=False)
@@ -429,9 +430,9 @@ print("\n=== 9. 打开作品：等「要用的东西」出现，不固定睡 ===
 #   · 判据都改成「**下一步要用的东西**出现了」：作品卡 / 章节项 / 续写按钮。
 #   · 补短随机延迟（打散机械节奏）。
 #   · 固定 `sleep(wait)` 一律改成"最多等 wait 秒"的条件等待。
-import src.books as _BK
-import src.login as _LG
-import src.ai as _AI2
+import xyxbot.books as _BK
+import xyxbot.login as _LG
+import xyxbot.ai as _AI2
 
 _bk_src = open(_BK.__file__, encoding="utf-8").read()
 _lg_src = open(_LG.__file__, encoding="utf-8").read()

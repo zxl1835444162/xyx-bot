@@ -103,7 +103,7 @@ class ChaptersMixin:
 
         def worker():
             try:
-                from src.novel import NovelProject
+                from xyxbot.novel import NovelProject
 
                 proj = NovelProject.load(path)
                 proj.global_prefix = _pre
@@ -381,7 +381,7 @@ class ChaptersMixin:
         if proj is None:
             return False
         try:
-            from src import config as C
+            from xyxbot import config as C
 
             self._collect_notes()      # 先把界面上的细纲/模板同步进工程
             ok = bool(proj.save_sidecar(C.LAST_PROJECT))
@@ -401,8 +401,8 @@ class ChaptersMixin:
         if getattr(self, "_project", None) is not None:
             return True                # 已经载入过了，别覆盖
         try:
-            from src import config as C
-            from src.novel import NovelProject
+            from xyxbot import config as C
+            from xyxbot.novel import NovelProject
 
             proj = NovelProject.restore_sidecar(C.LAST_PROJECT)
         except Exception as e:
@@ -489,7 +489,7 @@ class ChaptersMixin:
         if not p:
             return
         try:
-            from src.novel import NovelProject
+            from xyxbot.novel import NovelProject
 
             proj = NovelProject.open(p)
             self._project = proj

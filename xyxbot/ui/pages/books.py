@@ -93,7 +93,7 @@ class BooksPage:
 
         def worker():
             try:
-                from src import books as B
+                from xyxbot import books as B
 
                 page = self._ensure_page()
                 if not B.goto_books(page):
@@ -122,7 +122,7 @@ class BooksPage:
 
     def _open_in_thread(self, bk: dict):
         """真实打开（在已持有 page 的线程里调用）。"""
-        from src import books as B
+        from xyxbot import books as B
 
         title = bk.get("title")
         bid = bk.get("book_id")
@@ -230,7 +230,7 @@ class BooksPage:
 
         def worker():
             try:
-                from src import books as B
+                from xyxbot import books as B
 
                 page = self._ensure_page()
                 B.goto_books(page)

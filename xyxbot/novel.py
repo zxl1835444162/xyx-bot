@@ -18,7 +18,7 @@
 由 ai.py 在浏览器里点。
 
 用法：
-    from src.novel import NovelProject
+    from xyxbot.novel import NovelProject
 
     proj = NovelProject.load("C:/.../开局被绿.txt")
     proj.chapters               # [Chapter(no=1, code="#1", title=..., body=...)]

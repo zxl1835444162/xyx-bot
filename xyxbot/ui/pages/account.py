@@ -129,7 +129,7 @@ class AccountPage:
 
     def _session_info(self) -> dict:
         try:
-            from src import session as S
+            from xyxbot import session as S
             return S.describe()
         except Exception:
             return {"saved": False, "saved_at": "", "cookies": 0,
@@ -145,7 +145,7 @@ class AccountPage:
 
         if saved:
             try:
-                from src import session as S
+                from xyxbot import session as S
                 age = S.age_text()
             except Exception:
                 age = ""
@@ -203,9 +203,9 @@ class AccountPage:
 
         def worker():
             try:
-                from src.app import App
-                from src import login as L
-                from src.logging_redirect import LogRedirector
+                from xyxbot.app import App
+                from xyxbot import login as L
+                from xyxbot.logging_redirect import LogRedirector
 
                 if self._app is None:
                     self._app = App(headless=False,
@@ -253,7 +253,7 @@ class AccountPage:
         def worker():
             try:
                 import time as _t
-                from src import session as S
+                from xyxbot import session as S
 
                 # 等一下让登录线程自己保存
                 _t.sleep(1.5)
@@ -296,9 +296,9 @@ class AccountPage:
 
         def worker():
             try:
-                from src.app import App
-                from src import login as L
-                from src.logging_redirect import LogRedirector
+                from xyxbot.app import App
+                from xyxbot import login as L
+                from xyxbot.logging_redirect import LogRedirector
 
                 if self._app is None:
                     self._app = App(headless=False,
@@ -344,7 +344,7 @@ class AccountPage:
         self._stop_app()
         # ② 再删文件
         try:
-            from src import session as S
+            from xyxbot import session as S
 
             S.clear()
             self.log("已清除本机登录态，下次使用需重新登录", "warn")
@@ -364,7 +364,7 @@ class AccountPage:
     def _prepare_state(self) -> dict:
         """读准备状态（不启动浏览器，纯本地查询）。"""
         try:
-            from src import login as L
+            from xyxbot import login as L
             return L.is_ready()
         except Exception as e:
             return {"ok": False, "saved": False, "cookies": 0,
@@ -450,13 +450,13 @@ class AccountPage:
 
         def worker():
             try:
-                from src.logging_redirect import LogRedirector
+                from xyxbot.logging_redirect import LogRedirector
                 app = self._ensure_app()
                 rd = LogRedirector(
                     sink=lambda m: self.after(0, self.log, m, "info")
                 ).install()
                 try:
-                    from src import login as L
+                    from xyxbot import login as L
                     r = L.prepare_session(app, save=True, auto=True,
                                           wait_seconds=0, interactive=True)
                 finally:
@@ -502,12 +502,12 @@ class AccountPage:
                                "当前没有已启动的浏览器，请先点「① 打开网站并保存」",
                                "warn")
                     return
-                from src.logging_redirect import LogRedirector
+                from xyxbot.logging_redirect import LogRedirector
                 rd = LogRedirector(
                     sink=lambda m: self.after(0, self.log, m, "info")
                 ).install()
                 try:
-                    from src import login as L
+                    from xyxbot import login as L
                     ok = L.save_session(app.context, quiet=False)
                 finally:
                     rd.restore()

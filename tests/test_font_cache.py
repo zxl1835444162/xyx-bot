@@ -49,13 +49,13 @@ sys.path.insert(0, str(ROOT))
 import _support as S  # noqa: E402  文件布局的唯一接口（见 tests/_support.py）
 
 try:
-    from src.console import enable_utf8
+    from xyxbot.console import enable_utf8
 
     enable_utf8()
 except Exception:
     pass
 
-from ui import theme  # noqa: E402
+from xyxbot.ui import theme  # noqa: E402
 
 PASS: list[str] = []
 FAIL: list[str] = []

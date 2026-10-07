@@ -25,7 +25,7 @@ sys.path.insert(0, ROOT)
 # ★ 输出被重定向到文件/管道时 Windows 会用 GBK，日志里的 ⚠/✓ 会让
 #   print 直接抛 UnicodeEncodeError（实测）。先加固编码。
 try:
-    from src.console import enable_utf8
+    from xyxbot.console import enable_utf8
 
     enable_utf8()
 except Exception:
@@ -56,9 +56,9 @@ def t(label, fn):
 
 
 def main() -> int:
-    from src import ai as AI
-    from src import books as B
-    from src.app import App
+    from xyxbot import ai as AI
+    from xyxbot import books as B
+    from xyxbot.app import App
 
     say("=" * 78)
     say(f"  _click_first 拆解   {time.strftime('%H:%M:%S')}")

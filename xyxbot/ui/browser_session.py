@@ -75,7 +75,7 @@ class BrowserSession:
     # ---------------------------------------------------------------- 内部
 
     def _default_app_factory(self):
-        from src.app import App
+        from xyxbot.app import App
         return App(headless=False)
 
     def _loop(self):

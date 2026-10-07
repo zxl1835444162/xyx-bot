@@ -42,7 +42,7 @@ sys.path.insert(0, str(ROOT))
 import _support as S  # noqa: E402  文件布局的唯一接口（见 tests/_support.py）
 
 try:
-    from src.console import enable_utf8
+    from xyxbot.console import enable_utf8
 
     enable_utf8()
 except Exception:
@@ -93,7 +93,7 @@ def _enclosing_func(tree, lineno: int) -> str:
 #    （它就是守卫实现本身），其它任何裸绑都算失败。
 raw_binds = []          # (rel, lineno, func_name)
 for p in UI_FILES:
-    rel = p.relative_to(ROOT).as_posix()
+    rel = S.legacy_rel(p)
     try:
         tree = ast.parse(p.read_text(encoding="utf-8"))
     except SyntaxError:
@@ -127,7 +127,7 @@ check_true("Card._resize_win 里 self.configure(height) 带 != 判断",
 
 # ==================================================== ② 速率闸门
 print("\n=== ② 全局每秒重绘上限（兜底，不依赖 Tk） ===")
-from ui import theme  # noqa: E402
+from xyxbot.ui import theme  # noqa: E402
 
 check_true("存在 _REDRAW_PER_SEC 上限", isinstance(theme._REDRAW_PER_SEC, int)
            and theme._REDRAW_PER_SEC > 0)
@@ -146,7 +146,7 @@ print("\n=== ③ 行为：尺寸没变就不重绘（核心） ===")
 # ★ 不需要真窗口：bind_configure 只用到 bind / after / 属性，
 #   用替身做**确定性**验证，比靠事件循环可靠得多（CI 的 macOS runner
 #   连 Tk 定时器都不触发）。
-from ui.theme import bind_configure  # noqa: E402
+from xyxbot.ui.theme import bind_configure  # noqa: E402
 
 
 class _Ev:

@@ -37,7 +37,7 @@ sys.path.insert(0, str(ROOT))
 os.environ.setdefault("XYX_NO_DIALOG", "1")
 
 try:
-    from src.console import enable_utf8
+    from xyxbot.console import enable_utf8
 
     enable_utf8()
 except Exception:
@@ -122,7 +122,7 @@ for i in range(3):
 print("\n--- B) 项目里的 BrandButton（真组件，会绑 <Configure>）---")
 CTX["stage"] = "B BrandButton"
 try:
-    from ui.theme import BrandButton
+    from xyxbot.ui.theme import BrandButton
 
     hits = {"n": 0, "ms": 0.0}
     for i in range(6):
@@ -179,7 +179,7 @@ except Exception:
 print("\n--- C) GradientBar（也会在 Configure 里重绘）---")
 CTX["stage"] = "C GradientBar"
 try:
-    from ui.theme import GradientBar
+    from xyxbot.ui.theme import GradientBar
 
     g = GradientBar(root, height=6)
     g.pack(fill="x", pady=4)

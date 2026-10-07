@@ -28,7 +28,7 @@ except Exception:
 
 # ★ 输出重定向时避免 GBK 编码崩溃（详见 src/console.py）
 try:
-    from src.console import enable_utf8
+    from xyxbot.console import enable_utf8
 
     enable_utf8()
 except Exception:
@@ -103,7 +103,7 @@ def _log_fatal(err: str) -> None:
     """
     stamp = ""
     try:
-        from src import _buildinfo as B
+        from xyxbot import _buildinfo as B
 
         stamp = B.describe() + "\n"
     except Exception:
@@ -197,7 +197,7 @@ def run_app() -> int:
     Returns:
         进程退出码
     """
-    from ui.main_window import MainWindow
+    from xyxbot.ui.main_window import MainWindow
 
     # ★★ 全进程唯一的 Tk root：只当事件循环宿主，自己不显示
     root = tk.Tk()
@@ -378,7 +378,7 @@ def main() -> None:
         elif "--no-window" in sys.argv:
             wp = False
         try:
-            from src.selftest import run_selftest
+            from xyxbot.selftest import run_selftest
 
             sys.exit(run_selftest(smoke_ui=want_ui, window_probe=wp))
         except Exception:
@@ -386,7 +386,7 @@ def main() -> None:
             sys.exit(2)
 
     try:
-        from ui.shot import make_dpi_aware
+        from xyxbot.ui.shot import make_dpi_aware
 
         make_dpi_aware()
     except Exception:

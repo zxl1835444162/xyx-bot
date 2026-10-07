@@ -27,7 +27,7 @@ sys.path.insert(0, str(ROOT))
 import _support as S  # noqa: E402  文件布局的唯一接口（见 tests/_support.py）
 
 try:
-    from src.console import enable_utf8
+    from xyxbot.console import enable_utf8
 
     enable_utf8()
 except Exception:
@@ -287,7 +287,7 @@ _ai = None
 _real_import = False
 try:
     # ★ 必须按**包**导入：src/ai.py 里有 `from . import config` 等相对导入
-    import src.ai as _ai_mod
+    import xyxbot.ai as _ai_mod
     _ai = _ai_mod
     _real_import = True
 except Exception as e:
@@ -657,7 +657,7 @@ print("\n=== 11. 本章字数：必须与站点显示的一致（不能把换行
 #   站点 = 4018 字；app 的 len(get_body_text()) = 4676（虚高 16.4%，其中 \n 有 629 个）
 #   第1章：站点 15676 vs app 20027（虚高 27.8%）
 # ⇒ 站点口径 = 非空白字符数；app 必须读站点自己的数，才对得上用户的肉眼。
-import src.ai as _AI3
+import xyxbot.ai as _AI3
 
 check("count_chars 不数换行", _AI3.count_chars("你好\n世界"), 4)
 check("count_chars 不数空格", _AI3.count_chars("a b c"), 3)
