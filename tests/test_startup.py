@@ -38,6 +38,7 @@ import traceback
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+import _support as S  # noqa: E402  文件布局的唯一接口（见 tests/_support.py）
 os.environ.setdefault("XYX_NO_DIALOG", "1")
 
 try:
@@ -69,12 +70,12 @@ def check_true(name: str, cond, detail: str = ""):
 # ==================================================== ① 登录界面必须真的没了
 print("=== ① 按用户要求：登录界面已删除 ===")
 check_true("ui/login_window.py 已删除",
-           not (ROOT / "ui" / "login_window.py").exists())
+           not S.ui_file("login_window.py").exists())
 check_true("src/credentials.py 也删了（只被登录窗用）",
-           not (ROOT / "src" / "credentials.py").exists())
+           not S.pkg_file("credentials.py").exists())
 
 _importers = []
-for p in list((ROOT / "ui").rglob("*.py")) + list((ROOT / "src").rglob("*.py")) \
+for p in S.all_source_files() \
         + [ROOT / "run_gui.py", ROOT / "main.py"]:
     txt = p.read_text(encoding="utf-8")
     if "login_window" in txt or "LoginWindow" in txt:
@@ -90,7 +91,7 @@ check_true("run_gui 有顶层流程 run_app", "def run_app(" in _rg)
 print("\n=== ② 结构：只允许一个 Tk root / 一次 mainloop ===")
 _tk_calls: list = []
 _mainloops: list = []
-for p in list((ROOT / "ui").rglob("*.py")) + [ROOT / "run_gui.py",
+for p in [*S.ui_py_files(), ROOT / "run_gui.py",
                                               ROOT / "main.py"]:
     try:
         tree = ast.parse(p.read_text(encoding="utf-8"))
@@ -126,7 +127,7 @@ check("★ 只有 run_app 那一处无条件建 root", len(_unguarded), 1)
 check_true(f"唯一那处在 run_gui（{_unguarded}）",
            bool(_unguarded) and _unguarded[0].startswith("run_gui.py:"))
 check_true("主窗口是 Toplevel（不是各自建 Tk root）",
-           "tk.Toplevel)" in (ROOT / "ui" / "main_window.py").read_text(
+           "tk.Toplevel)" in S.ui_file("main_window.py").read_text(
                encoding="utf-8"))
 
 # ==================================================== ③ 看门狗与诊断

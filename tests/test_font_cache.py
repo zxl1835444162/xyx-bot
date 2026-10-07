@@ -46,6 +46,7 @@ import tkinter.font as tkfont
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+import _support as S  # noqa: E402  文件布局的唯一接口（见 tests/_support.py）
 
 try:
     from src.console import enable_utf8
@@ -228,7 +229,7 @@ try:
 
     # ================================================ ⑦ 静态检查
     print("\n=== ⑦ 静态检查：别再退回「只有命中才缓存」 ===")
-    src = (ROOT / "ui" / "theme.py").read_text(encoding="utf-8")
+    src = S.ui_file("theme.py").read_text(encoding="utf-8")
     check_true("解析结果无条件写缓存", "_FONT_CACHE[key] = result" in src)
     check_true("系统字体表有「已定稿」守卫（不会每次重来）",
                "if _SYS_FAMILIES is not None:" in src

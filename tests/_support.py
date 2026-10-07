@@ -55,6 +55,21 @@ def read(path: Path) -> str:
     return Path(path).read_text(encoding="utf-8")
 
 
+def resolve_legacy(rel: str) -> Path:
+    """把**重构前的相对路径**解析成现在的真实路径。
+
+    旧测试/旧注释里到处是 `src/ai.py`、`ui/pages/ai_flow.py` 这种写法
+    （那时业务包叫 `src`、界面是平级的 `ui`）。有了这个函数，测试照旧写老路径
+    也能读到文件，改名的成本就从"18 处调用点"降到"这一处映射"。
+    """
+    rel = str(rel).replace("\\", "/").lstrip("./")
+    if rel.startswith("src/"):
+        return pkg_file(*rel[len("src/"):].split("/"))
+    if rel.startswith("ui/"):
+        return ui_file(*rel[len("ui/"):].split("/"))
+    return ROOT / rel
+
+
 def read_if_exists(path: Path, default: str = "") -> str:
     p = Path(path)
     return read(p) if p.exists() else default

@@ -39,6 +39,7 @@ import time
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+import _support as S  # noqa: E402  文件布局的唯一接口（见 tests/_support.py）
 
 try:
     from src.console import enable_utf8
@@ -68,7 +69,7 @@ def check_true(name: str, cond, detail: str = ""):
 
 # ==================================================== ① 静态：AST 检查绑定
 print("=== ① 静态检查：所有 <Configure> 绑定都必须走 bind_configure ===")
-UI_FILES = sorted(list((ROOT / "ui").rglob("*.py")))
+UI_FILES = S.ui_py_files()
 
 
 def _enclosing_func(tree, lineno: int) -> str:
@@ -120,7 +121,7 @@ _calls = sum(p.read_text(encoding="utf-8").count("bind_configure(")
 check_true(f"bind_configure 被真正用起来了（{_calls} 处引用/定义）", _calls >= 8)
 
 # ★★ 断掉自激的核心：写自身尺寸的地方必须有「值没变就不写」的判断
-_src = (ROOT / "ui" / "theme.py").read_text(encoding="utf-8")
+_src = S.ui_file("theme.py").read_text(encoding="utf-8")
 check_true("Card._resize_win 里 self.configure(height) 带 != 判断",
            "self.winfo_reqheight() != need" in _src)
 
@@ -223,7 +224,7 @@ except Exception as e:
 
 # ==================================================== ⑥ 源码里写明原因
 print("\n=== ⑥ 源码里必须写明这是为什么 ===")
-_src = (ROOT / "ui" / "theme.py").read_text(encoding="utf-8")
+_src = S.ui_file("theme.py").read_text(encoding="utf-8")
 check_true("writeup 里有真机实测数据（97968 / 126038）",
            "97968" in _src and "126038" in _src)
 check_true("说明了 macOS 特有的行为", "macOS" in _src)

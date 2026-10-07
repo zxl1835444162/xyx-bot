@@ -24,6 +24,7 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+import _support as S  # noqa: E402  文件布局的唯一接口（见 tests/_support.py）
 
 # ★ 输出被重定向到文件/管道时，Windows 会用 GBK，日志里的 ⚠ 会让
 #   print 直接抛 UnicodeEncodeError（实测退出码 1）。先加固编码。
@@ -502,7 +503,7 @@ check_true("ChaptersMixin 不再重复实现 _ai_batch_go",
            "_ai_batch_go" not in ChaptersMixin.__dict__)
 check_true("ChaptersMixin 不再重复实现 _ai_go",
            "_ai_go" not in ChaptersMixin.__dict__)
-_chap_src = (ROOT / "ui" / "pages" / "chapters.py").read_text(encoding="utf-8")
+_chap_src = S.ui_file("pages", "chapters.py").read_text(encoding="utf-8")
 _chap_lines = len(_chap_src.splitlines())
 # 这条是"别再胖回去"的粗粒度护栏：删掉 606 行重复代码后是 ~400 行，
 # 2026-10-04 又加了「轻量记忆」约 100 行 → 508。真正的不变量是上面那两条

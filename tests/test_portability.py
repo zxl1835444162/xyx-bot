@@ -28,6 +28,7 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+import _support as S  # noqa: E402  文件布局的唯一接口（见 tests/_support.py）
 
 try:
     from src.console import enable_utf8
@@ -59,7 +60,7 @@ def check_true(name: str, cond, detail: str = ""):
 print("=== A. 静态审计：源码里有没有未加保护的 Windows-only 用法 ===")
 
 SRC_FILES = sorted(
-    list((ROOT / "src").rglob("*.py")) + list((ROOT / "ui").rglob("*.py")))
+    S.all_source_files())
 
 #: 允许出现 Windows-only 调用的文件（各自都有平台判断），
 #: 值 = 它应该包含的平台保护标记
@@ -105,7 +106,7 @@ check_true(f"src/ 与 ui/ 里没有写死的 Windows 绝对路径（发现 {offe
            not offenders)
 
 # ---- macOS 浏览器检测表必须齐全 ----
-_det = (ROOT / "src" / "browser_detector.py").read_text(encoding="utf-8")
+_det = S.pkg_file("browser_detector.py").read_text(encoding="utf-8")
 for name, exe in [
     ("Chrome", "Contents/MacOS/Google Chrome"),
     ("Edge", "Contents/MacOS/Microsoft Edge"),
@@ -121,7 +122,7 @@ check_true("非 Windows 下不要求 .exe 后缀（改判可执行位）",
            "os.access(file_path, os.X_OK)" in _det)
 
 # ---- 字体：必须给 macOS 备好中文字体 ----
-_theme = (ROOT / "ui" / "theme.py").read_text(encoding="utf-8")
+_theme = S.ui_file("theme.py").read_text(encoding="utf-8")
 check_true("字体按平台分表", "UI_FONT_CANDIDATES" in _theme
            and "MONO_FONT_CANDIDATES" in _theme)
 check_true("macOS 首选 PingFang SC（系统中文默认字体）",
@@ -160,8 +161,8 @@ check_true("spec 把 playwright driver 收进包（collect_all）",
            "collect_all" in _spec and "playwright" in _spec)
 check_true("spec 收集 src / ui 子模块（注册表是动态 import 的）",
            "collect_submodules" in _spec
-           and '"src"' in _spec and '"ui"' in _spec,
-           "spec 里应有 collect_submodules('src'/'ui')")
+           and S.PKG_NAME in _spec,
+           f"spec 里应有 collect_submodules('{S.PKG_NAME}')（界面包在业务包里）")
 check_true("spec 产出 .app（BUNDLE）", "BUNDLE(" in _spec
            and "XYXBot.app" in _spec)
 check_true("spec 设了中文显示名与 Retina 支持",
@@ -383,7 +384,7 @@ check("run_selftest() 退出码 0（可以启动）",
       run_selftest(verbose=False), 0)
 
 # ---- 浏览器缺失时的报错要"人话"（打包分发最容易踩的坑）----
-_b = (ROOT / "src" / "browser.py").read_text(encoding="utf-8")
+_b = S.pkg_file("browser.py").read_text(encoding="utf-8")
 check_true("浏览器缺失时给出可照抄的命令",
            "playwright install chromium" in _b)
 check_true("浏览器缺失时的提示提到装 Chrome/Edge",
@@ -476,7 +477,7 @@ check_true("全功能测试不会在 macOS 上自我跳过（历史盲区）",
            "darwin" not in _afe_code and "os.getenv(\"CI\")" not in _afe_code,
            "代码里不应出现 darwin/CI 跳过逻辑")
 # 打包版自检要把 9 个页面逐个切一遍并断言显示
-_st = (ROOT / "src" / "selftest.py").read_text(encoding="utf-8")
+_st = S.pkg_file("selftest.py").read_text(encoding="utf-8")
 check_true("打包版 --selftest 会逐页验证显示（不只是构造）",
            "页面「" in _st and "显示正常" in _st)
 
@@ -611,7 +612,7 @@ def _code_without_strings(src: str) -> str:
 
 
 _bad_120 = []
-for _f in (ROOT / "ui").rglob("*.py"):
+for _f in S.ui_py_files():
     if _f.name == "theme.py":
         continue
     _code = _code_without_strings(_f.read_text(encoding="utf-8"))
@@ -622,7 +623,7 @@ check_true("ui/（除 theme 外）没有写死 delta/120 的滚动量纲", not _
            "; ".join(_bad_120))
 
 # ★ 反过来：theme.wheel_units 必须**真的**按平台算，不能退化成只认一种量纲
-_wu_src = (ROOT / "ui" / "theme.py").read_text(encoding="utf-8")
+_wu_src = S.ui_file("theme.py").read_text(encoding="utf-8")
 _wu = _wu_src.split("def wheel_units", 1)[-1].split("\ndef ", 1)[0]
 check_true("wheel_units 里对 macOS 做了单独处理",
            "darwin" in _wu or "_platform_key" in _wu,

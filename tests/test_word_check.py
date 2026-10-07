@@ -24,6 +24,7 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+import _support as S  # noqa: E402  文件布局的唯一接口（见 tests/_support.py）
 
 try:
     from src.console import enable_utf8
@@ -52,7 +53,9 @@ def check_true(name: str, cond, detail: str = ""):
 
 
 def _read(rel: str) -> str:
-    return (ROOT / rel).read_text(encoding="utf-8")
+    # `src/...` / `ui/...` 是重构前的旧路径写法，交给 _support 解析：
+    # 业务包改名、界面收进包里之后，这里不用再改。
+    return S.read(S.resolve_legacy(rel))
 
 
 def _strip_strings(src: str) -> str:
@@ -291,7 +294,7 @@ except Exception as e:
     print(f"  [WARN] 以包方式导入 src.ai 失败（{str(e).splitlines()[0]}），"
           f"尝试文件加载")
     try:
-        _spec = _ilu.spec_from_file_location("_ai_mod", str(ROOT / "src" / "ai.py"))
+        _spec = _ilu.spec_from_file_location("_ai_mod", str(S.pkg_file("ai.py")))
         _ai = _ilu.module_from_spec(_spec)
         _spec.loader.exec_module(_ai)
         _real_import = True

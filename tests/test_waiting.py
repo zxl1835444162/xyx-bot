@@ -19,7 +19,7 @@ import time
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-import _support  # noqa: E402  文件布局的唯一接口（见 tests/_support.py）
+import _support as S  # noqa: E402  文件布局的唯一接口（见 tests/_support.py）
 
 # ★ 输出被重定向到文件/管道时，Windows 会用 GBK，日志里的 ⚠ 会让
 #   print 直接抛 UnicodeEncodeError（实测退出码 1）。先加固编码。
@@ -178,7 +178,7 @@ check("WaitResult 失败为假", bool(WaitResult(ok=False)), False)
 
 # ==================================================== B. 静态审计
 print("\n=== B. 关键路径已不再「傻等」（静态审计） ===")
-ai_src = (ROOT / "src" / "ai.py").read_text(encoding="utf-8")
+ai_src = S.pkg_file("ai.py").read_text(encoding="utf-8")
 tree = ast.parse(ai_src)
 
 
@@ -259,7 +259,7 @@ check_true(f"ai.py 固定 sleep 总量 {tot:.1f}s < 12s（改造前 36.0s）", t
 # 实测抓到的**具体缺陷**，都附上了当时的实测数字。
 print("\n=== C. 真机调试所发现缺陷的回归检查 ===")
 
-_SRC = ROOT / "src"
+_SRC = S.PKG
 _AI_SRC = (_SRC / "ai.py").read_text(encoding="utf-8")
 _ai_tree = ast.parse(_AI_SRC)
 
@@ -386,7 +386,7 @@ for _tf in ("test_fixes.py", "test_gui_pages.py", "test_waiting.py"):
 # 实测代价：`wait_until(gen_finished, timeout=300)` 让**每章干等满 300 秒**
 #           才判"生成失败"，而生成其实 ~9 秒就完成了。
 #           `wait_until(review_pane_open, ...)` 同理，每章白等 8.5 秒。
-_support.add_tools_to_path()   # 审计工具已从仓库根搬到 tools/audit/，由 _support 定位
+S.add_tools_to_path()   # 审计工具已从仓库根搬到 tools/audit/，由 _support 定位
 import audit_wait_args  # noqa: E402  （tools/audit/audit_wait_args.py）
 
 _n_files, _probs = audit_wait_args.audit_all(ROOT)
