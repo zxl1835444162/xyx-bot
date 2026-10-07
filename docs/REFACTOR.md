@@ -146,6 +146,43 @@ $ python tests/run_all.py
 > 差点误判成"搬家搬坏了"。改用 runner 的 `subprocess.run(capture_output=True)` 后
 > 一切正常 —— 这也是把 runner 做成正式产物的原因之一。
 
+### A8 测试与文件布局解耦（Phase A2 完成）
+
+**做法**
+
+* 新增 `tests/_support.py` 作为"文件长在哪"的唯一接口。两个关键设计：
+  * `PKG_NAME = "xyxbot" if (ROOT/"xyxbot").is_dir() else "src"` —— 改名当天自动跟随，
+    测试不用动；
+  * `resolve_legacy("src/ai.py")` —— 旧的 `src/...` / `ui/...` 写法统一映射到现位置，
+    把"改名的成本"从 18 处调用点降到 1 处映射。
+* 7 个测试文件的 21 处硬编码路径改走 `S.pkg_file() / S.ui_file() / S.pkg_py_files() /
+  S.ui_py_files() / S.all_source_files()`。
+* spec 断言从「必须出现 `"src"` 和 `"ui"`」改成「必须出现当前业务包名 `S.PKG_NAME`」——
+  界面包收进业务包之后这条断言依然成立（这是原先最脆的一处：它把旧结构写进了断言）。
+* `test_word_check.py` 的 `_read()` 辅助函数内部改走 `_support`，一处改动覆盖 3 处旧路径调用。
+
+**验收**：`tests/run_all.py` → 12/12 用例通过、1015 项断言全绿。
+
+### A9 两次翻车记录（都是"脚本改文件"惹的祸，留作教训）
+
+**① 换行符被悄悄改成 CRLF。** 我用 Python 脚本改过的 21 个文件（7 个测试 +
+12 个 tools 脚本 + CHANGELOG）整份变成 CRLF —— 因为 Windows 上
+`Path.write_text()` 会把 `\n` 写成 `\r\n`，而 `read_text()` 又会把它读成 `\n`，
+于是 git diff 显示"整文件重写"（5907 插入 / 5896 删除），跨平台协作也会出问题。
+
+修法：写回 LF，并在 `.gitattributes` 里加 `* text=auto eol=lf` 从根上防止复发。
+
+**② `.gitattributes` 规则顺序写反。** 我第一版把 `*.bat text eol=crlf` 写在
+`* text=auto eol=lf` **前面** —— 但 .gitattributes 里**最后匹配的规则生效**，
+结果 `*` 把 `*.bat` 的例外吃掉了，声明与实际行为不符。
+
+修法：通用规则在前、具体例外在后（现在是：默认 LF → `*.bat/*.cmd` CRLF →
+shell 脚本与二进制收尾）。用 `git check-attr eol -- <文件>` 逐个验证过。
+
+> 结论写进规矩：**改文件要用脚本时，必须显式指定换行符**；
+> 改完必须 `git status` / `git diff --stat` 看一眼改动规模是否合理 ——
+> 这次的"5907 插入"就是最直接的报警信号。
+
 ---
 
 ## 路径对照表（给翻历史文档用）
