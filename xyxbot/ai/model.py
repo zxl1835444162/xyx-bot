@@ -199,6 +199,99 @@ def _open_model_panel(page: Page, container: str, panel: str):
     return opened, scope
 
 
+def _pick_model_category(page: Page, scope: str, model: str) -> bool:
+    """② 点左栏分类 button（注意：分类是 button，不是 span）。返回是否点到。
+
+    定位策略：先按「模型分类」区块的精确容器找 → 再按位置判断（左栏在面板
+    中下部、宽度较大）→ 最后退到第一个匹配项。
+
+    ★ 效率改造：原来是固定 sleep 0.5 等右栏卡片列表刷新。
+      改为等「分类已被选中」这一可见信号（Naive UI 会给选中项加状态类），
+      拿不到就短暂等一下，不再无条件吃满 0.5 秒。
+    """
+    cat = page.locator(f"{scope} button").filter(has_text=model)
+    picked = None
+    # 优先按「模型分类」区块精确定位（左栏有自己的容器）
+    try:
+        in_list = page.locator(
+            f"{scope} .model-picker-category-list button"
+        ).filter(has_text=model)
+        if in_list.count():
+            picked = in_list.first
+            print("[ai] （分类定位：model-picker-category-list）")
+    except Exception:
+        pass
+    if picked is None:
+        for i in range(cat.count()):
+            try:
+                b = cat.nth(i).bounding_box()
+            except Exception:
+                continue
+            # 左栏分类项的 y 在面板中下部（>200），且宽度较大
+            if b and b["y"] > 200 and b["width"] > 120:
+                picked = cat.nth(i)
+                break
+    if picked is None and cat.count():
+        picked = cat.first
+    if picked is None:
+        print(f"[ai] ✗ 模型面板里找不到分类「{model}」")
+        _shot(page, "ai_model_cat_missing")
+        return False
+    _safe_click(picked, label=f"模型分类「{model}」")
+    wait_until(lambda: _cat_selected(picked), timeout=1.0, interval=0.05,
+               desc="分类选中") or time.sleep(0.1)
+    print(f"[ai] ✓ 点击 分类「{model}」")
+    return True
+
+
+def _pick_model_card(page: Page, scope: str, model: str, target: str,
+                     card_hint: str) -> None:
+    """③ 点右栏模型卡片的「选择」（★ 这一步是真正选中的关键）。
+
+    找卡片的顺序：卡片提示词命中 → 分类名≠卡片名时按 target 找 →
+    右栏里含模型名、且位置像卡片（x>380、宽>300）的那个。
+    找不到不是致命错误：上层还有「使用此模型」兜底，所以只告警不返回失败。
+    """
+    hint = card_hint or MODEL_CARD_HINT.get(model, "")
+    card = None
+    if hint:
+        c = page.locator(f"{scope} button").filter(has_text=hint)
+        if c.count():
+            card = c.first
+    if card is None and model != target:
+        # 分类名与卡片名不同（如 分类=智慧版 / 卡片=智慧版-6A）
+        want_card = target or model
+        c = page.locator(f"{scope} button").filter(has_text=want_card)
+        if c.count():
+            card = c.first
+    if card is None:
+        # 兜底：右栏里含模型名的卡片
+        c = page.locator(f"{scope} button").filter(has_text=model)
+        for i in range(c.count()):
+            try:
+                b = c.nth(i).bounding_box()
+            except Exception:
+                continue
+            if b and b["x"] > 380 and b["width"] > 300:
+                card = c.nth(i)
+                break
+    if card is not None:
+        try:
+            inner = card.locator("text=选择")
+            _safe_click(inner.first if inner.count() else card,
+                        label="模型卡片「选择」")
+            print("[ai] ✓ 点击 模型卡片「选择」")
+        except Exception as e:
+            print(f"[ai] ⚠ 点卡片失败：{str(e).splitlines()[0]}，尝试 JS")
+            try:
+                card.evaluate("el => el.click()")
+                print("[ai] ✓ JS 降级点击 模型卡片")
+            except Exception as e2:
+                print(f"[ai] ✗ 卡片点击失败：{e2}")
+    else:
+        print(f"[ai] ⚠ 没找到「{model}」的模型卡片，直接试用「使用此模型」")
+
+
 def select_model(page: Page, model: str = "细腻版",
                  associate: str = "正常",
                  container: str = ".n-modal",
@@ -268,81 +361,11 @@ def select_model(page: Page, model: str = "细腻版",
     opened, scope = _panel
 
     # ② 点左栏分类 button（注意：分类是 button，不是 span）
-    cat = page.locator(f"{scope} button").filter(has_text=model)
-    picked = None
-    # 优先按「模型分类」区块精确定位（左栏有自己的容器）
-    try:
-        in_list = page.locator(
-            f"{scope} .model-picker-category-list button"
-        ).filter(has_text=model)
-        if in_list.count():
-            picked = in_list.first
-            print("[ai] （分类定位：model-picker-category-list）")
-    except Exception:
-        pass
-    if picked is None:
-        for i in range(cat.count()):
-            try:
-                b = cat.nth(i).bounding_box()
-            except Exception:
-                continue
-            # 左栏分类项的 y 在面板中下部（>200），且宽度较大
-            if b and b["y"] > 200 and b["width"] > 120:
-                picked = cat.nth(i)
-                break
-    if picked is None and cat.count():
-        picked = cat.first
-    if picked is None:
-        print(f"[ai] ✗ 模型面板里找不到分类「{model}」")
-        _shot(page, "ai_model_cat_missing")
+    if not _pick_model_category(page, scope, model):
         return False
-    _safe_click(picked, label=f"模型分类「{model}」")
-    # ★ 效率改造：原来是固定 sleep 0.5 等右栏卡片列表刷新。
-    #   改为等「分类已被选中」这一可见信号（Naive UI 会给选中项加状态类），
-    #   拿不到就短暂等一下，不再无条件吃满 0.5 秒。
-    wait_until(lambda: _cat_selected(picked), timeout=1.0, interval=0.05,
-               desc="分类选中") or time.sleep(0.1)
-    print(f"[ai] ✓ 点击 分类「{model}」")
 
     # ③ 点右栏模型卡片的「选择」（★ 这一步是真正选中的关键）
-    hint = card_hint or MODEL_CARD_HINT.get(model, "")
-    card = None
-    if hint:
-        c = page.locator(f"{scope} button").filter(has_text=hint)
-        if c.count():
-            card = c.first
-    if card is None and model != target:
-        # 分类名与卡片名不同（如 分类=智慧版 / 卡片=智慧版-6A）
-        want_card = target or model
-        c = page.locator(f"{scope} button").filter(has_text=want_card)
-        if c.count():
-            card = c.first
-    if card is None:
-        # 兜底：右栏里含模型名的卡片
-        c = page.locator(f"{scope} button").filter(has_text=model)
-        for i in range(c.count()):
-            try:
-                b = c.nth(i).bounding_box()
-            except Exception:
-                continue
-            if b and b["x"] > 380 and b["width"] > 300:
-                card = c.nth(i)
-                break
-    if card is not None:
-        try:
-            inner = card.locator("text=选择")
-            _safe_click(inner.first if inner.count() else card,
-                        label="模型卡片「选择」")
-            print("[ai] ✓ 点击 模型卡片「选择」")
-        except Exception as e:
-            print(f"[ai] ⚠ 点卡片失败：{str(e).splitlines()[0]}，尝试 JS")
-            try:
-                card.evaluate("el => el.click()")
-                print("[ai] ✓ JS 降级点击 模型卡片")
-            except Exception as e2:
-                print(f"[ai] ✗ 卡片点击失败：{e2}")
-    else:
-        print(f"[ai] ⚠ 没找到「{model}」的模型卡片，直接试用「使用此模型」")
+    _pick_model_card(page, scope, model, target, card_hint)
 
     # ④ 联想能力（★ 必须在「使用此模型」之前）
     if associate and associate != "跳过":
