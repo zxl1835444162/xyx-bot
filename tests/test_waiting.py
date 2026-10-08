@@ -381,9 +381,9 @@ check_true("存在 src/console.py:enable_utf8",
            (_SRC / "console.py").exists()
            and "def enable_utf8" in (_SRC / "console.py")
            .read_text(encoding="utf-8"))
-for _entry in (S.pkg_file("cli.py"), ROOT / "run_gui.py"):
-    _t = _entry.read_text(encoding="utf-8")
-    check_true(f"{_entry.relative_to(ROOT).as_posix()} 调用了 enable_utf8"
+for _rel, _t in (("xyxbot/cli/（包）", S.module_source("src/cli.py")),
+                 ("run_gui.py", (ROOT / "run_gui.py").read_text(encoding="utf-8"))):
+    check_true(f"{_rel} 调用了 enable_utf8"
                f"（重定向到文件时不会崩）",
                "enable_utf8" in _t)
 for _tf in ("test_fixes.py", "test_gui_pages.py", "test_waiting.py"):

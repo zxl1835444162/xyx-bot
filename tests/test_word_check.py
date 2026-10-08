@@ -210,8 +210,8 @@ check_true("ai_batch_chapters 收 max_retry",
 check_true("download 路径 ai_auto_chapter 有 max_retry 形参",
            "max_retry: int = 5" in ai_src)
 
-# CLI（xyxbot/cli.py）也应当传（别再写死）
-main_code = _real_code("xyxbot/cli.py")
+# CLI（xyxbot/cli/ 包）也应当传（别再写死）
+main_code = S.module_source("src/cli.py")
 check_true("cli.py 真实代码里没有 max_retry=0",
            "max_retry=0" not in main_code.replace(" ", ""),
            "CLI 那条路径也在写死")
