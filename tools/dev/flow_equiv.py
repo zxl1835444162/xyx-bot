@@ -31,6 +31,20 @@ ROOT = Path(__file__).resolve().parents[2]
 TARGETS = {
     "xyxbot/ai/flows.py": ["ai_continue", "ai_review", "ai_auto_chapter", "ai_batch_chapters"],
     "xyxbot/ui/pages/ai_flow.py": ["_ai_go", "_ai_review_go", "_ai_both_go", "_ai_batch_go"],
+    # ★ 跑章页已拆成包：这些方法名现在分布在不同子模块里
+    "xyxbot/ui/pages/run/*.py": [
+        "_page_run", "_run_build_status", "_refresh_run_status", "_run_missing",
+        "_refresh_run_todo", "_run_continue_last",
+        "_run_build_target", "_run_build_range", "_run_build_template",
+        "_run_build_notes", "_run_build_params", "_run_build_progress",
+        "_run_local_checks", "_run_show_checks", "_run_precheck",
+        "_run_precheck_deep_async", "_run_precheck_deep_done",
+        "_run_start", "_run_stop", "_run_clear_results",
+        "_run_draw_progress", "_run_render_progress", "_run_progress_sink",
+        "_run_apply_progress", "_run_add_result_row",
+        "_run_range_to_latest", "_run_export_results", "_run_copy_failed",
+        "_run_retry_failed",
+    ],
 }
 
 # 纯日志 / 纯界面刷新：与流程语义无关，比对时忽略
@@ -130,11 +144,30 @@ def flatten(name: str, table: dict, seen=None, depth=0, extra_ignore=()) -> list
 
 
 def old_src(rel: str) -> str:
+    """HEAD 版本的源码。目标带 `*` 时：先试"拆包之前那个单文件"，再回退到通配。
+
+    （例：`pages/run/*.py` 在 HEAD 上其实是单个 `pages/run.py`。）
+    """
+    if "*" in rel:
+        single = rel.split("/*")[0] + ".py"
+        blob = subprocess.run(["git", "-C", str(ROOT), "show", f"HEAD:{single}"],
+                              capture_output=True, text=True, encoding="utf-8")
+        if blob.returncode == 0 and blob.stdout.strip():
+            return blob.stdout
+        return "\n".join(
+            subprocess.run(["git", "-C", str(ROOT), "show",
+                            f"HEAD:{p.relative_to(ROOT).as_posix()}"],
+                           capture_output=True, text=True,
+                           encoding="utf-8").stdout
+            for p in sorted(ROOT.glob(rel)))
     return subprocess.run(["git", "-C", str(ROOT), "show", f"HEAD:{rel}"],
                           capture_output=True, text=True, encoding="utf-8").stdout
 
 
 def new_src(rel: str) -> str:
+    if "*" in rel:
+        return "\n".join(p.read_text(encoding="utf-8")
+                         for p in sorted(ROOT.glob(rel)))
     return (ROOT / rel).read_text(encoding="utf-8")
 
 

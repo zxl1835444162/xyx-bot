@@ -495,8 +495,15 @@ OWNERSHIP = [
 ]
 for cls, names in OWNERSHIP:
     for n in names:
-        check_true(f"{n} 在 {cls.__name__}", n in cls.__dict__,
+        # ★ 2026-10-07：run 页从单文件拆成 `pages/run/`（6 个 Mixin + 组合类），
+        #   所以"归属"要看**整个 MRO**（自己或它的 mixin 基类）——
+        #   而真正要守住的不变量是：**主窗口不得自己定义这些方法**
+        #   （窗口只做组合，页面逻辑必须在页面里）。两条都查。
+        own = n in cls.__dict__ or any(n in b.__dict__ for b in cls.__mro__[1:]
+                                      if b is not object)
+        check_true(f"{n} 属于 {cls.__name__}（自身或其 mixin 基类）", own,
                    f"仍在 MainWindow.__dict__: {n in MainWindow.__dict__}")
+        check_true(f"{n} 没有退回主窗口", n not in MainWindow.__dict__)
 
 # ★ 死代码必须真的没了：AI 流程只能有 ai_flow.py 一份实现
 check_true("ChaptersMixin 不再重复实现 _ai_batch_go",
