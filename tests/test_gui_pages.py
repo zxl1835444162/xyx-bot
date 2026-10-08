@@ -517,8 +517,10 @@ _chap_lines = len(_chap_src.splitlines())
 # `not in ChaptersMixin.__dict__`，行数只是防止再堆成上帝模块。
 check_true(f"chapters.py 没有重新膨胀（{_chap_lines} 行 < 700）",
            _chap_lines < 700, f"{_chap_lines} 行（删重复代码前是 1034 行）")
-check_true("确实生效的是 AiFlowMixin 的实现",
-           MainWindow._ai_batch_go.__qualname__.startswith("AiFlowMixin"),
+check_true("确实生效的是 AI 流程那套实现（不是别的页面的同名方法）",
+           # ★ 2026-10-07：ai_flow 已拆成 5 个 Mixin（AiFlowShared/AiSingle/
+           #   AiReview/AiBoth/AiBatch），所以按"ai 流程家族"认亲。
+           MainWindow._ai_batch_go.__qualname__.split(".")[0].startswith("Ai"),
            MainWindow._ai_batch_go.__qualname__)
 
 # 窗口类只该留骨架

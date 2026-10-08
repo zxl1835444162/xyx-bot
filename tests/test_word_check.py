@@ -146,7 +146,12 @@ def _real_code(rel: str) -> str:
 # ============================================ 2. UI 不再写死（静态契约）
 print("\n=== 2. UI 接线（防退化）===")
 
-flow_code = _real_code("ui/pages/ai_flow.py")
+_flow_path = S.resolve_legacy("ui/pages/ai_flow.py")   # ★ 已拆成包 → 返回包目录
+if _flow_path.is_dir():
+    flow_code = "".join(_strip_strings(_f.read_text(encoding="utf-8"))
+                        for _f in sorted(_flow_path.glob("*.py")))
+else:
+    flow_code = _real_code("ui/pages/ai_flow.py")
 
 # ★ 核心：不许再出现硬编码的 max_retry=0
 check_true("ai_flow.py 真实代码里没有 max_retry=0",
