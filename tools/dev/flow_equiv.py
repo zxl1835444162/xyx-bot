@@ -40,7 +40,9 @@ TARGETS = {
         "pick_review_requirement", "start_review", "wait_review_done",
         "replace_review_result",
     ],
-    "xyxbot/books.py": ["open_book", "create_book", "close_activity_modal"],
+    # ★ books 也拆成包了（旧版自动回退到 HEAD 的单文件 books.py）
+    "xyxbot/books/*.py": ["open_book", "create_book", "close_activity_modal",
+                          "list_books", "goto_books", "is_in_editor"],
     "xyxbot/ui/pages/ai_flow.py": ["_ai_go", "_ai_review_go", "_ai_both_go", "_ai_batch_go"],
     # ★ 跑章页已拆成包（run/*.py），其中"表单区"又拆成 run/form/*.py：
     #   这些方法名现在分布在不同子模块里，所以分成两个目标。
