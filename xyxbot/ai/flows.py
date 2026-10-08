@@ -215,6 +215,49 @@ def ai_continue(page: Page,
 
 
 
+def _ensure_review_chapter(page: Page, open_chapter: str,
+                           chapter_index: int = 0) -> None:
+    """⓪ 先打开要审的那一章 —— 否则正文区为空、待审文本也是空的。
+
+    ★ 不能靠 editor_ready 判断——`.tiptap.ProseMirror` 一直存在（空壳），
+      必须用 need_text=True 看正文是否真有内容。
+
+    ★★ 修正（2026-10-04）：切完章必须**等正文真的渲染出来**再往下。
+       原实现切完章节就直接开抽屉，此时编辑器可能还在重渲染，
+       后面 fill_review_text 拼接时读到**空正文**或**上一章的旧正文**
+       —— 这正是用户说的「有时候出现差错」。
+    """
+    if not editor_ready(page, need_text=True):
+        open_chapter(page, which=open_chapter, index=chapter_index)
+        read_body_settled(page, timeout=8.0)
+    else:
+        print(f"[ai] 正文已就绪（{chapter_word_count(page)} 字），跳过打开章节")
+
+
+def _open_review_pane_for_chapter(page: Page, wait_pane: float) -> bool:
+    """① 打开审稿抽屉，并**校验框内是当前章正文**（不符则关掉重开）。
+
+    ★★ 修正（2026-10-05）：必须校验。用户报障 + 探针坐实：抽屉**开着**换章时，
+      站点不会重灌「待审文本」，框里一直是旧章内容 ⇒ 审错章。
+      （我先前误判为"不存在"，是因为复刻流程时自己关了抽屉 —— 见
+        `open_review_pane` 的详细说明。）
+      一条龙阶段三走到这里时抽屉可能是：
+        · 首开（自己关过）→ 站点正常灌当前章 ⇒ 校验通过
+        · 仍然开着（用户手动开过 / 上一章残留）→ 校验失败 ⇒ 关掉重开
+
+    ★ 实测：模型选择弹窗是**根级 `.n-modal.model-picker-modal`**，跟审稿抽屉
+      **平级**、不在抽屉里（这一点由调用方的 `select_model(container=…)` 处理）。
+    """
+    _expect = strip_review_wrapper(get_body_text(page))
+    if _expect:
+        print(f"[ai] 当前章正文 {chapter_word_count(page, body=_expect)} 字"
+              " → 开抽屉时会校验框内是否一致")
+    else:
+        print("[ai] ⚠ 读不到当前章正文 → 开抽屉时不校验"
+              "（退化为旧行为，站点首开一般会正常灌入）")
+    return open_review_pane(page, wait=wait_pane, expect_body=_expect)
+
+
 def ai_review(page: Page,
               text: str = "",
               model: str = "智慧版",
@@ -285,36 +328,11 @@ def ai_review(page: Page,
         print(f"    替换落盘 = 是（先全选：{'是' if select_all else '否'}）")
     print("=" * 58)
 
-    # ⓪ ★ 先打开章节（否则正文区为空，待审文本也是空的）
-    #    ★ 不能靠 editor_ready 判断——`.tiptap.ProseMirror` 一直存在（空壳），
-    #      必须用 need_text=True 看正文是否真有内容。
-    if not editor_ready(page, need_text=True):
-        open_chapter(page, which=open_chapter, index=chapter_index)
-        # ★★ 修正（2026-10-04）：切完章必须**等正文真的渲染出来**再往下。
-        #    原实现切完章节就直接开抽屉，此时编辑器可能还在重渲染，
-        #    后面 fill_review_text 拼接时读到**空正文**或**上一章的旧正文**
-        #    —— 这正是用户说的「有时候出现差错」。
-        read_body_settled(page, timeout=8.0)
-    else:
-        print(f"[ai] 正文已就绪（{chapter_word_count(page)} 字），跳过打开章节")
+    # ⓪ ★ 先打开章节（判据与坑见 _ensure_review_chapter 的文档串）
+    _ensure_review_chapter(page, open_chapter, chapter_index)
 
-    # ① 打开审稿面板（右侧抽屉）
-    #    ★★ 修正（2026-10-05）：必须**校验框内是当前章正文**，不符则关掉重开。
-    #      用户报障 + 探针坐实：抽屉**开着**换章时，站点不会重灌「待审文本」，
-    #      框里一直是旧章内容 ⇒ 审错章。
-    #      （我先前误判为"不存在"，是因为复刻流程时自己关了抽屉 —— 见
-    #        `open_review_pane` 的详细说明。）
-    #      一条龙阶段三走到这里时抽屉可能是：
-    #        · 首开（自己关过）→ 站点正常灌当前章 ⇒ 校验通过
-    #        · 仍然开着（用户手动开过 / 上一章残留）→ 校验失败 ⇒ 关掉重开
-    _expect = strip_review_wrapper(get_body_text(page))
-    if _expect:
-        print(f"[ai] 当前章正文 {chapter_word_count(page, body=_expect)} 字"
-              " → 开抽屉时会校验框内是否一致")
-    else:
-        print("[ai] ⚠ 读不到当前章正文 → 开抽屉时不校验"
-              "（退化为旧行为，站点首开一般会正常灌入）")
-    if not open_review_pane(page, wait=wait_pane, expect_body=_expect):
+    # ① 打开审稿面板（右侧抽屉）+ 校验框内是当前章
+    if not _open_review_pane_for_chapter(page, wait_pane):
         return False
 
     # ② 选模型

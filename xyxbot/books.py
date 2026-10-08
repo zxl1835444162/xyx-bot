@@ -597,6 +597,79 @@ def click_create_book(page: Page, wait: float = 2.0) -> bool:
     return True
 
 
+def _close_one_activity_modal(page: Page, modal, verbose: bool) -> bool:
+    """对**一个已确认可见**的活动弹窗尝试三种关法，返回是否关掉了。
+
+    a) 优先精确的 close 按钮
+    b) 「不再弹出」这类文字按钮
+    c) 兜底 ESC
+    每种都带条件等待（等弹窗真的消失），不再固定 sleep。
+    """
+    closed = False
+
+    # a) 优先精确的 close 按钮
+    for closer in ("button[aria-label='close']", ".n-base-close",
+                   "[class*=close]", "text=×"):
+        try:
+            btn = modal.locator(closer).first
+            if btn.is_visible(timeout=500):
+                btn.click(timeout=2000)
+                closed = True
+                if verbose:
+                    print(f"[books]   已点关闭按钮 ({closer})")
+                # ★ 条件等待：等这个弹窗真的消失（原来固定 sleep 0.7s）
+                wait_gone(lambda m=modal: bool(m.count())
+                          and m.is_visible(timeout=60),
+                          timeout=1.5, interval=0.05, desc="活动弹窗关闭")
+                break
+        except Exception:
+            continue
+
+    # b) 「不再弹出」这类文字按钮
+    if not closed:
+        for txt in ("text=不再弹出", "text=不再提醒", "text=关闭"):
+            try:
+                btn = modal.locator(txt).first
+                if btn.is_visible(timeout=400):
+                    btn.click(timeout=2000)
+                    closed = True
+                    if verbose:
+                        print(f"[books]   已点「{txt}」")
+                    wait_gone(lambda m=modal: bool(m.count())
+                              and m.is_visible(timeout=60),
+                              timeout=1.5, interval=0.05, desc="活动弹窗关闭")
+                    break
+            except Exception:
+                continue
+
+    # c) 兜底：ESC
+    if not closed:
+        try:
+            page.keyboard.press("Escape")
+            wait_gone(lambda m=modal: bool(m.count())
+                      and m.is_visible(timeout=60),
+                      timeout=1.5, interval=0.05, desc="活动弹窗关闭(ESC)")
+            closed = True
+            if verbose:
+                print("[books]   已按 ESC 关闭")
+        except Exception:
+            pass
+
+    return closed
+
+
+def _activity_modal_still_there(page: Page, marks, not_create: str) -> bool:
+    """最终确认：活动弹窗还在不在。"""
+    for mark in marks:
+        try:
+            if page.locator(f".n-modal{mark}{not_create}").first.is_visible(
+                    timeout=400):
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def close_activity_modal(page: Page, verbose: bool = True) -> bool:
     """关掉可能挡住页面的活动弹窗（邀请好友 / 大奖赛 / 国庆特惠等）。
 
@@ -634,67 +707,14 @@ def close_activity_modal(page: Page, verbose: bool = True) -> bool:
         if verbose:
             print(f"[books] 发现活动弹窗 {mark}，尝试关闭 ...")
 
-        # a) 优先精确的 close 按钮
-        for closer in ("button[aria-label='close']", ".n-base-close",
-                       "[class*=close]", "text=×"):
-            try:
-                btn = modal.locator(closer).first
-                if btn.is_visible(timeout=500):
-                    btn.click(timeout=2000)
-                    closed = True
-                    if verbose:
-                        print(f"[books]   已点关闭按钮 ({closer})")
-                    # ★ 条件等待：等这个弹窗真的消失（原来固定 sleep 0.7s）
-                    wait_gone(lambda m=modal: bool(m.count())
-                              and m.is_visible(timeout=60),
-                              timeout=1.5, interval=0.05, desc="活动弹窗关闭")
-                    break
-            except Exception:
-                continue
-
-        # b) 「不再弹出」这类文字按钮
-        if not closed:
-            for txt in ("text=不再弹出", "text=不再提醒", "text=关闭"):
-                try:
-                    btn = modal.locator(txt).first
-                    if btn.is_visible(timeout=400):
-                        btn.click(timeout=2000)
-                        closed = True
-                        if verbose:
-                            print(f"[books]   已点「{txt}」")
-                        wait_gone(lambda m=modal: bool(m.count())
-                                  and m.is_visible(timeout=60),
-                                  timeout=1.5, interval=0.05, desc="活动弹窗关闭")
-                        break
-                except Exception:
-                    continue
-
-        # c) 兜底：ESC
-        if not closed:
-            try:
-                page.keyboard.press("Escape")
-                wait_gone(lambda m=modal: bool(m.count())
-                          and m.is_visible(timeout=60),
-                          timeout=1.5, interval=0.05, desc="活动弹窗关闭(ESC)")
-                closed = True
-                if verbose:
-                    print("[books]   已按 ESC 关闭")
-            except Exception:
-                pass
+        closed = _close_one_activity_modal(page, modal, verbose)
 
         if closed:
             break
 
     # 最终确认：活动弹窗还在不在
     if closed:
-        still = False
-        for mark in activity_marks:
-            try:
-                if page.locator(f".n-modal{mark}{not_create}").first.is_visible(timeout=400):
-                    still = True
-                    break
-            except Exception:
-                continue
+        still = _activity_modal_still_there(page, activity_marks, not_create)
         if verbose:
             print("[books] 活动弹窗" + ("⚠ 仍然存在" if still else "✓ 已清除"))
         return not still
