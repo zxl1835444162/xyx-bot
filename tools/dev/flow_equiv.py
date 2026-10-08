@@ -41,12 +41,11 @@ TARGETS = {
     ],
     "xyxbot/books.py": ["open_book", "create_book", "close_activity_modal"],
     "xyxbot/ui/pages/ai_flow.py": ["_ai_go", "_ai_review_go", "_ai_both_go", "_ai_batch_go"],
-    # ★ 跑章页已拆成包：这些方法名现在分布在不同子模块里
+    # ★ 跑章页已拆成包（run/*.py），其中"表单区"又拆成 run/form/*.py：
+    #   这些方法名现在分布在不同子模块里，所以分成两个目标。
     "xyxbot/ui/pages/run/*.py": [
         "_page_run", "_run_build_status", "_refresh_run_status", "_run_missing",
         "_refresh_run_todo", "_run_continue_last",
-        "_run_build_target", "_run_build_range", "_run_build_template",
-        "_run_build_notes", "_run_build_params", "_run_build_progress",
         "_run_local_checks", "_run_show_checks", "_run_precheck",
         "_run_precheck_deep_async", "_run_precheck_deep_done",
         "_run_start", "_run_stop", "_run_clear_results",
@@ -54,6 +53,14 @@ TARGETS = {
         "_run_apply_progress", "_run_add_result_row",
         "_run_range_to_latest", "_run_export_results", "_run_copy_failed",
         "_run_retry_failed",
+    ],
+    "xyxbot/ui/pages/run/form/*.py": [
+        "_run_build_target", "_run_build_range", "_run_build_template",
+        "_run_build_notes", "_run_build_params", "_run_build_progress",
+        "_run_params_shortcut", "_run_params_words", "_run_params_review_model",
+        "_run_params_review_instruction", "_run_params_review_switches",
+        "_run_params_solo_chapter", "_run_params_wrapper",
+        "_run_params_solo_tools",
     ],
 }
 
