@@ -408,6 +408,69 @@ def read_body_settled(page: Page, timeout: float = 6.0,
 
 
 
+def _wait_review_text_settled(page: Page, want_len: int, head: str) -> bool:
+    """★ 等填进去的内容真的在 textarea 里（替代固定 sleep 0.8s）。
+
+    判据（比原来强）：
+      · 文本长度接近期望（±2% 或 ±5 字）—— 防"只得一半"
+      · 且内容以我们填的**开头**为准（前缀匹配）—— 防填错框
+    任一匹配元素满足即算落盘成功。超时不抛异常，只返回 False。
+
+    ★★★ 加固（2026-10-04，用户报「有时候出现差错」）：原判据只看期望文本
+      **尾部 40 字**、且遍历所有匹配元素（任一命中即算过）—— 偏弱，
+      容易"填炸了也算成功"。现在改为**长度 + 前缀**，并要求真的含我们填的
+      开头（开头比尾部更不容易撞车）。
+    """
+    if want_len <= 0:
+        return True
+    tol = max(5, int(want_len * 0.02))
+
+    def _ok() -> bool:
+        for s in AI_SELECTORS["review_text"]:
+            try:
+                loc = page.locator(s)
+                if not loc.count():
+                    continue
+                cur = loc.first.input_value(timeout=200) or ""
+            except Exception:
+                continue
+            if head and head not in cur:
+                continue
+            if abs(len(cur) - want_len) <= tol:
+                return True
+        return False
+
+    res = wait_until(_ok, timeout=3.0, interval=0.08, desc="待审文本落盘")
+    if not res.ok:
+        print("[ai] ⚠ 未能确认待审文本已完整落盘（内容长度/前缀对不上）")
+    return res.ok
+
+
+def _compose_review_input(page: Page, instruction: str,
+                          read_body: bool) -> tuple:
+    """② 把「指令 + 分隔线 + 当前章正文」拼成待审文本。返回 (full, head)。
+
+    ★★ 修正（2026-10-04）：读正文必须**等它渲染好**，不能瞬时读。
+    ★★★ 二次修正（同日）：读到的是**纯正文**（read_body_settled 内部已剥
+       旧指令层）。这里再做一次防御性剥离，确保任何来源都不会套娃。
+    """
+    body = read_body_settled(page) if read_body else ""
+    body = strip_review_wrapper(body)      # ★ 防御性：即使上游漏剥也安全
+    instr = instruction.strip()
+    if body.strip():
+        full = (f"{instr}\n\n"
+                f"{REVIEW_SEP}\n\n{body}")
+        print(f"[ai] --- 待审文本 = 指令({len(instr)}字) "
+              f"+ 正文({len(body)}字) = {len(full)} 字 ---")
+        head = instr[:20]          # 前缀取指令开头，稳定且不会撞车
+    else:
+        full = instr
+        head = instr[:20]
+        print(f"[ai] --- 待审文本 = 仅指令（{len(full)} 字，"
+              f"没读到正文）---")
+    return full, head
+
+
 def fill_review_text(page: Page, text: str = "",
                      instruction: str = "",
                      read_body: bool = True) -> bool:
@@ -447,69 +510,21 @@ def fill_review_text(page: Page, text: str = "",
     Returns:
         bool 是否成功
     """
-    def _settle(expected: str, head: str, want_len: int) -> bool:
-        """★ 等填进去的内容真的在 textarea 里（替代固定 sleep 0.8s）。
-
-        判据（比原来强）：
-          · 文本长度接近期望（±2% 或 ±5 字）—— 防"只得一半"
-          · 且内容以我们填的**开头**为准（前缀匹配）—— 防填错框
-        任一匹配元素满足即算落盘成功。超时不抛异常，只返回 False。
-        """
-        if want_len <= 0:
-            return True
-        tol = max(5, int(want_len * 0.02))
-
-        def _ok() -> bool:
-            for s in AI_SELECTORS["review_text"]:
-                try:
-                    loc = page.locator(s)
-                    if not loc.count():
-                        continue
-                    cur = loc.first.input_value(timeout=200) or ""
-                except Exception:
-                    continue
-                if head and head not in cur:
-                    continue
-                if abs(len(cur) - want_len) <= tol:
-                    return True
-            return False
-
-        res = wait_until(_ok, timeout=3.0, interval=0.08, desc="待审文本落盘")
-        if not res.ok:
-            print("[ai] ⚠ 未能确认待审文本已完整落盘（内容长度/前缀对不上）")
-        return res.ok
-
     # ① 显式 text → 直接覆盖
     if text:
         print(f"[ai] --- 填写待审文本（显式 {len(text)} 字）---")
         ok = _fill_first(page, AI_SELECTORS["review_text"], text,
                          label="待审文本")
-        _settle(text, text.strip()[:20], len(text))
+        _wait_review_text_settled(page, len(text), text.strip()[:20])
         return ok
 
     # ② 正文 + 指令 拼接
-    #    ★★ 修正（2026-10-04）：读正文必须**等它渲染好**，不能瞬时读。
-    #    ★★★ 二次修正（同日）：读到的是**纯正文**（read_body_settled 内部已剥
-    #       旧指令层）。这里再做一次防御性剥离，确保任何来源都不会套娃。
     if instruction:
-        body = read_body_settled(page) if read_body else ""
-        body = strip_review_wrapper(body)      # ★ 防御性：即使上游漏剥也安全
-        instr = instruction.strip()
-        if body.strip():
-            full = (f"{instr}\n\n"
-                    f"{REVIEW_SEP}\n\n{body}")
-            print(f"[ai] --- 待审文本 = 指令({len(instr)}字) "
-                  f"+ 正文({len(body)}字) = {len(full)} 字 ---")
-            head = instr[:20]          # 前缀取指令开头，稳定且不会撞车
-        else:
-            full = instr
-            head = instr[:20]
-            print(f"[ai] --- 待审文本 = 仅指令（{len(full)} 字，"
-                  f"没读到正文）---")
+        full, head = _compose_review_input(page, instruction, read_body)
         ok = _fill_first(page, AI_SELECTORS["review_text"], full,
                          label="待审文本")
         if ok:
-            _settle(full, head, len(full))
+            _wait_review_text_settled(page, len(full), head)
         return ok
 
     # ③ 都空 → 不动（沿用页面自带当前章内容）

@@ -36,6 +36,49 @@ LAST_DECISION: Optional[dict] = None
 
 # ---------------------------------------------------------------- 组合流程
 
+def _ensure_continue_dialog_clean(page: Page, wait_dialog: float) -> str:
+    """⓪-0 弹窗洁净度校验：必须真的看得见「开始 AI 续写」按钮。
+
+    返回 "" = 弹窗可用；否则返回失败原因（调用方写进 LAST_DECISION 并返回 False）。
+
+    ★★（2026-10-05 新增，定位用户报「下一章点续写就报错」）
+      用户原话：「生成某一章没事，下一章一点『AI续写正文』就出错」
+                + 「停留在续写界面」。
+
+      ★★★ 用户实测日志（run-20261005-003748.log，第2章）给出的**真实根因**：
+        ```
+        [ai] ✓ 弹窗已出现: .n-modal:has-text('续写正文')
+        [ai] ✓ 续写弹窗为初始态（干净的新弹窗）
+        ...
+        [ai] ✗ 找不到目标: 开始 AI 续写       ← 失败点
+        ```
+        ⇒ 打开的弹窗**没有「开始 AI 续写」按钮**（是个残页/假弹窗）。
+          前几版校验只查"是否完成态/是否生成中"，这种残页**两样都不是**，
+          所以被判定为"初始态 ✅"放行 —— 校验不够严。
+
+      ⇒ 现在的权威判据：**必须真的看得见「开始 AI 续写」按钮**。
+        没有 → 关掉重开；重开仍没有 → 明确失败（绝不再带上"找不到按钮"往下走）。
+    """
+    if _has_start_button(page):
+        print("[ai] ✓ 续写弹窗可用（含「开始 AI 续写」按钮）")
+        return ""
+    print("[ai] ⚠ 打开的续写弹窗**没有「开始 AI 续写」按钮**"
+          f"（完成态={gen_finished(page)} 生成中={gen_in_progress(page)}）"
+          "→ 判定为残页/假弹窗，关掉重开")
+    _close_stale_result(page)
+    _close_any_continue_dialog(page)
+    if not open_continue_dialog(page, wait=wait_dialog):
+        print("[ai] ✗ 重开续写弹窗失败")
+        return "续写弹窗打不开（重开失败）"
+    if not _has_start_button(page):
+        print("[ai] ✗ 重开后仍找不到「开始 AI 续写」按钮"
+              "→ 终止（继续只会重复'找不到目标'）")
+        _shot(page, "ai_continue_no_start_btn")
+        return "续写弹窗里没有「开始 AI 续写」按钮（残页）"
+    print("[ai] ✓ 续写弹窗已刷新，含「开始 AI 续写」按钮")
+    return ""
+
+
 def ai_continue(page: Page,
                 plot: str = "",
                 model: str = "细腻版",
@@ -103,44 +146,12 @@ def ai_continue(page: Page,
                          "reason": "续写弹窗打不开"}
         return False
 
-    # ⓪-0 ★★ 弹窗洁净度校验（2026-10-05 新增，定位用户报「下一章点续写就报错」）
-    #   用户原话：「生成某一章没事，下一章一点『AI续写正文』就出错」
-    #              + 「停留在续写界面」。
-    #
-    #   ★★★ 用户实测日志（run-20261005-003748.log，第2章）给出的**真实根因**：
-    #     ```
-    #     [ai] ✓ 弹窗已出现: .n-modal:has-text('续写正文')
-    #     [ai] ✓ 续写弹窗为初始态（干净的新弹窗）
-    #     ...
-    #     [ai] ✗ 找不到目标: 开始 AI 续写       ← 失败点
-    #     ```
-    #     ⇒ 打开的弹窗**没有「开始 AI 续写」按钮**（是个残页/假弹窗）。
-    #       前几版校验只查"是否完成态/是否生成中"，这种残页**两样都不是**，
-    #       所以被判定为"初始态 ✅"放行 —— 校验不够严。
-    #
-    #   ⇒ 现在的权威判据：**必须真的看得见「开始 AI 续写」按钮**。
-    #     没有 → 关掉重开；重开仍没有 → 明确失败（绝不再带上"找不到按钮"往下走）。
-    if not _has_start_button(page):
-        print("[ai] ⚠ 打开的续写弹窗**没有「开始 AI 续写」按钮**"
-              f"（完成态={gen_finished(page)} 生成中={gen_in_progress(page)}）"
-              "→ 判定为残页/假弹窗，关掉重开")
-        _close_stale_result(page)
-        _close_any_continue_dialog(page)
-        if not open_continue_dialog(page, wait=wait_dialog):
-            print("[ai] ✗ 重开续写弹窗失败")
-            LAST_DECISION = {"ok": False, "words": -1, "tries": [], "rounds": 0,
-                             "reason": "续写弹窗打不开（重开失败）"}
-            return False
-        if not _has_start_button(page):
-            print("[ai] ✗ 重开后仍找不到「开始 AI 续写」按钮"
-                  "→ 终止（继续只会重复'找不到目标'）")
-            _shot(page, "ai_continue_no_start_btn")
-            LAST_DECISION = {"ok": False, "words": -1, "tries": [], "rounds": 0,
-                             "reason": "续写弹窗里没有「开始 AI 续写」按钮（残页）"}
-            return False
-        print("[ai] ✓ 续写弹窗已刷新，含「开始 AI 续写」按钮")
-    else:
-        print("[ai] ✓ 续写弹窗可用（含「开始 AI 续写」按钮）")
+    # ⓪-0 ★★ 弹窗洁净度校验（判据与根因见 _ensure_continue_dialog_clean 的文档串）
+    _clean_why = _ensure_continue_dialog_clean(page, wait_dialog)
+    if _clean_why:
+        LAST_DECISION = {"ok": False, "words": -1, "tries": [], "rounds": 0,
+                         "reason": _clean_why}
+        return False
 
     # ⓪ ★ 选快捷选项（提示词）—— 必须在填剧情之前，
     #    因为换提示词可能会重置「续写要求」框里的内容
