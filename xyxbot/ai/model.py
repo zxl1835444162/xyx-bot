@@ -18,6 +18,99 @@ __all__ = ["fill_plot", "select_model", "set_associate_level"]
 
 
 
+def _open_associate_slider(page: Page, container: str = ""):
+    """① 点「联想能力」button 打开浮层，返回滑块 locator；失败返回 None。
+
+    ★ 效率改造：原来固定 sleep 0.5s 等浮层出现。
+      改成等**滑块真的出现** —— 浮层一渲染就继续。
+    """
+    sels = list(AI_SELECTORS["btn_associate"])
+    if container:
+        sels = [f"{container} button:has-text('联想能力')"] + sels
+    if not _click_first(page, sels, label="联想能力(打开滑块)"):
+        return None
+    sl = page.locator(ASSOCIATE_SLIDER_SEL).first
+    wait_until(lambda: bool(sl.count()) and sl.is_visible(timeout=60),
+               timeout=3.0, interval=0.05, desc="联想滑块浮层出现")
+    if not sl.count():
+        print("[ai] ✗ 浮动层里没找到联想程度滑块")
+        _shot(page, "ai_assoc_slider_missing")
+        return None
+    return sl
+
+
+def _associate_mark_x(sl, level: str) -> float:
+    """② 找目标刻度的 x 坐标：优先读刻度文本，兜底按已知映射等比换算。"""
+    marks = sl.locator("[class*=n-slider-mark]")
+    target_x = None
+    for i in range(marks.count()):
+        e = marks.nth(i)
+        try:
+            if _text_of(e, timeout=300) == level:
+                bb = e.bounding_box()
+                if bb:
+                    target_x = bb["x"] + bb["width"] / 2
+                    break
+        except Exception:
+            continue
+    if target_x is None:
+        # 兜底：按已知映射等比换算
+        rail = sl.locator("[class*=n-slider-rail]").first
+        rb = rail.bounding_box()
+        idx = ASSOCIATE_MARKS.index(level)
+        target_x = rb["x"] + 10 + (rb["width"] - 20) * idx / 5
+    print(f"[ai] 目标刻度「{level}」x≈{target_x:.0f}")
+    return target_x
+
+
+def _drag_associate_handle(page: Page, sl, target_x: float):
+    """③ 拖手柄到目标刻度。返回 (是否成功, rail 的 bounding_box)。
+
+    rail 的框要带回去给「⑤ 点空白处收起浮层」用（就在 rail 左上角外侧点一下）。
+    """
+    handle = sl.locator("[class*=n-slider-handle]").first
+    hb = handle.bounding_box()
+    if not hb:
+        print("[ai] ✗ 拿不到滑块手柄")
+        return False, None
+    rail = sl.locator("[class*=n-slider-rail]").first
+    rb = rail.bounding_box()
+    y = rb["y"] + rb["height"] / 2
+    try:
+        page.mouse.move(hb["x"] + hb["width"] / 2, hb["y"] + hb["height"] / 2)
+        page.mouse.down()
+        time.sleep(0.1)
+        page.mouse.move(target_x, y, steps=12)
+        time.sleep(0.1)
+        page.mouse.up()
+    except Exception as e:
+        print(f"[ai] ✗ 拖动滑块失败：{e}")
+        return False, None
+    return True, rb
+
+
+def read_associate_level(page: Page) -> str:
+    """回读当前联想档位文本。
+
+    ★ 必须带 count()+超时：浮层没开时该选择器不存在，
+      裸 inner_text() 会等到默认 15 秒（见 _text_of 的说明）。
+    """
+    return _text_of(page.locator("[class*=association-level]"), timeout=400)
+
+
+def _collapse_associate_popover(page: Page, sl, rb) -> None:
+    """⑤ 点模型面板空白处收起浮层（★ 千万别误点「使用此模型」）。
+
+    ★ 等浮层真的收起（原来固定 sleep 0.3s）。
+    """
+    try:
+        page.mouse.click(rb["x"] - 120, rb["y"] - 60)
+        wait_gone(lambda: bool(sl.count()) and sl.is_visible(timeout=60),
+                  timeout=1.0, interval=0.05, desc="联想浮层收起")
+    except Exception:
+        pass
+
+
 def set_associate_level(page: Page, level: str = "正常",
                         container: str = "") -> bool:
     """设置「联想能力」档位（滑块，6 档）。
@@ -42,76 +135,25 @@ def set_associate_level(page: Page, level: str = "正常",
         level = "正常"
 
     # ① 点「联想能力」button 打开浮层
-    sels = list(AI_SELECTORS["btn_associate"])
-    if container:
-        sels = [f"{container} button:has-text('联想能力')"] + sels
-    if not _click_first(page, sels, label="联想能力(打开滑块)"):
-        return False
-
-    # ★ 效率改造：原来固定 sleep 0.5s 等浮层出现。
-    #   改成等**滑块真的出现** —— 浮层一渲染就继续。
-    sl = page.locator(ASSOCIATE_SLIDER_SEL).first
-    wait_until(lambda: bool(sl.count()) and sl.is_visible(timeout=60),
-               timeout=3.0, interval=0.05, desc="联想滑块浮层出现")
-    if not sl.count():
-        print("[ai] ✗ 浮动层里没找到联想程度滑块")
-        _shot(page, "ai_assoc_slider_missing")
+    sl = _open_associate_slider(page, container)
+    if sl is None:
         return False
 
     # ② 找目标刻度的 x
-    marks = sl.locator("[class*=n-slider-mark]")
-    target_x = None
-    for i in range(marks.count()):
-        e = marks.nth(i)
-        try:
-            if _text_of(e, timeout=300) == level:
-                bb = e.bounding_box()
-                if bb:
-                    target_x = bb["x"] + bb["width"] / 2
-                    break
-        except Exception:
-            continue
-    if target_x is None:
-        # 兜底：按已知映射等比换算
-        rail = sl.locator("[class*=n-slider-rail]").first
-        rb = rail.bounding_box()
-        idx = ASSOCIATE_MARKS.index(level)
-        target_x = rb["x"] + 10 + (rb["width"] - 20) * idx / 5
-    print(f"[ai] 目标刻度「{level}」x≈{target_x:.0f}")
+    target_x = _associate_mark_x(sl, level)
 
     # ③ 拖手柄
-    handle = sl.locator("[class*=n-slider-handle]").first
-    hb = handle.bounding_box()
-    if not hb:
-        print("[ai] ✗ 拿不到滑块手柄")
-        return False
-    rail = sl.locator("[class*=n-slider-rail]").first
-    rb = rail.bounding_box()
-    y = rb["y"] + rb["height"] / 2
-    try:
-        page.mouse.move(hb["x"] + hb["width"] / 2, hb["y"] + hb["height"] / 2)
-        page.mouse.down()
-        time.sleep(0.1)
-        page.mouse.move(target_x, y, steps=12)
-        time.sleep(0.1)
-        page.mouse.up()
-    except Exception as e:
-        print(f"[ai] ✗ 拖动滑块失败：{e}")
+    dragged, rb = _drag_associate_handle(page, sl, target_x)
+    if not dragged:
         return False
 
     # ★ 效率改造：原来是固定 sleep 0.4s 等吸附生效，再回读。
     #   改成**等回读文本里出现目标档位**（这本来就是 ④ 的断言条件）。
-    def _assoc_readback() -> str:
-        # ★ 必须带 count()+超时：浮层没开时该选择器不存在，
-        #   裸 inner_text() 会等到默认 15 秒（见 _text_of 的说明）。
-        return _text_of(page.locator("[class*=association-level]"),
-                        timeout=400)
-
-    wait_until(lambda: level in _assoc_readback(),
+    wait_until(lambda: level in read_associate_level(page),
                timeout=1.5, interval=0.05, desc=f"联想能力吸附到「{level}」")
 
     # ④ 回读断言
-    txt = _assoc_readback()
+    txt = read_associate_level(page)
     first_line = txt.split("|")[0].strip().replace("\n", " ")
     if level in txt:
         print(f"[ai] ✓ 联想能力已设为「{level}」（当前：{first_line}）")
@@ -121,13 +163,7 @@ def set_associate_level(page: Page, level: str = "正常",
         ok = False
 
     # ⑤ 点模型面板空白处收起浮层（不要误点「使用此模型」）
-    try:
-        page.mouse.click(rb["x"] - 120, rb["y"] - 60)
-        # ★ 等浮层真的收起（原来固定 sleep 0.3s）
-        wait_gone(lambda: bool(sl.count()) and sl.is_visible(timeout=60),
-                  timeout=1.0, interval=0.05, desc="联想浮层收起")
-    except Exception:
-        pass
+    _collapse_associate_popover(page, sl, rb)
     return ok
 
 

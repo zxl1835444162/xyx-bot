@@ -20,6 +20,57 @@ __all__ = ["_same_body", "close_review_pane", "dismiss_review_confirm", "fill_re
 
 
 
+def _pane_body_is_current(page: Page, expect_body: str) -> bool:
+    """抽屉**已经开着**时：框里的正文是不是当前章。不是就关掉重开。
+
+    ★★ 抽屉开着换章不会刷新 —— 用户报障 + 探针坐实。
+    返回 True = 可以直接用（内容对得上，或调用方不要求校验）。
+    返回 False = 已经关掉了旧抽屉，调用方应走"重开"流程。
+    """
+    if not expect_body:
+        print("[ai] ✓ 审稿面板已在")
+        return True
+    cur = strip_review_wrapper(read_review_box(page))
+    if _same_body(cur, expect_body):
+        print(f"[ai] ✓ 审稿面板已在，且框内正文与当前章一致"
+              f"（{len(cur)} 字）")
+        return True
+    # 内容对不上 → 关掉重开，强制站点重灌当前章正文
+    print("[ai] ⚠ 审稿抽屉开着但框内正文不是当前章"
+          f"（框内 {len(cur)} 字 / 当前章 {len(expect_body)} 字）"
+          f"→ 关掉重开以刷新")
+    try:
+        close_review_pane(page, wait=1.0)
+    except Exception:
+        pass
+    return False
+
+
+def _click_review_button(page: Page, attempt: int) -> None:
+    """② 点顶部「AI审稿」。
+
+    ★ 短超时原生点击 + JS 降级（站点残留遮罩会拦原生点击，
+      详见 CLICK_FAST_TIMEOUT 处说明）
+    """
+    try:
+        btn = page.locator(AI_SELECTORS["btn_review"][0]).first
+        if btn.count():
+            try:
+                btn.scroll_into_view_if_needed(timeout=CLICK_FAST_TIMEOUT)
+            except Exception:
+                pass
+            try:
+                btn.click(timeout=CLICK_FAST_TIMEOUT)
+                print(f"[ai] ✓ 已点「AI审稿」（第 {attempt} 次）")
+            except Exception:
+                btn.evaluate("e => e.click()")
+                print(f"[ai] ✓ 已点「AI审稿」（第 {attempt} 次，JS 降级）")
+        else:
+            print(f"[ai] ⚠ 第 {attempt} 次：找不到「AI审稿」按钮")
+    except Exception as e:
+        print(f"[ai] ⚠ 第 {attempt} 次点击失败：{str(e).splitlines()[0]}")
+
+
 def open_review_pane(page: Page, wait: float = 0.6,
                      max_try: int = 4,
                      expect_body: str = "") -> bool:
@@ -58,22 +109,8 @@ def open_review_pane(page: Page, wait: float = 0.6,
     # ★★ 面板已开：先看框里是不是**当前章**的正文
     #    （抽屉开着换章不会刷新 —— 用户报障 + 探针坐实）
     if review_pane_open(page):
-        if not expect_body:
-            print("[ai] ✓ 审稿面板已在")
+        if _pane_body_is_current(page, expect_body):
             return True
-        cur = strip_review_wrapper(read_review_box(page))
-        if _same_body(cur, expect_body):
-            print(f"[ai] ✓ 审稿面板已在，且框内正文与当前章一致"
-                  f"（{len(cur)} 字）")
-            return True
-        # 内容对不上 → 关掉重开，强制站点重灌当前章正文
-        print("[ai] ⚠ 审稿抽屉开着但框内正文不是当前章"
-              f"（框内 {len(cur)} 字 / 当前章 {len(expect_body)} 字）"
-              f"→ 关掉重开以刷新")
-        try:
-            close_review_pane(page, wait=1.0)
-        except Exception:
-            pass
 
     for attempt in range(1, max_try + 1):
         # ① 清干扰（有则关、没则跳过）
@@ -89,25 +126,7 @@ def open_review_pane(page: Page, wait: float = 0.6,
             return True
 
         # ② 点「AI审稿」
-        try:
-            btn = page.locator(AI_SELECTORS["btn_review"][0]).first
-            if btn.count():
-                try:
-                    btn.scroll_into_view_if_needed(timeout=CLICK_FAST_TIMEOUT)
-                except Exception:
-                    pass
-                # ★ 短超时原生点击 + JS 降级（站点残留遮罩会拦原生点击，
-                #   详见 CLICK_FAST_TIMEOUT 处说明）
-                try:
-                    btn.click(timeout=CLICK_FAST_TIMEOUT)
-                    print(f"[ai] ✓ 已点「AI审稿」（第 {attempt} 次）")
-                except Exception:
-                    btn.evaluate("e => e.click()")
-                    print(f"[ai] ✓ 已点「AI审稿」（第 {attempt} 次，JS 降级）")
-            else:
-                print(f"[ai] ⚠ 第 {attempt} 次：找不到「AI审稿」按钮")
-        except Exception as e:
-            print(f"[ai] ⚠ 第 {attempt} 次点击失败：{str(e).splitlines()[0]}")
+        _click_review_button(page, attempt)
 
         # ③ 等面板
         #   ★ 效率改造（2026-10-04 实测）：原来是「固定 sleep(wait=0.6)
