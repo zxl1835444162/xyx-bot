@@ -469,50 +469,11 @@ def ai_auto_chapter(page: Page,
             print(f"[auto] 收尾清理异常（忽略）：{_e}")
 
     # ================= 阶段零：流程准备（可选）=================
-    #  ★ 用户需求（2026-10-03）：一条龙之前先做「打开网站 + 保存 cookie/缓存」。
-    #    UI 里已经单独给了「① 打开网站并保存」按钮；这里提供程序化入口，
-    #    方便 CLI / 任务直接传 prepare=True。
-    if prepare:
-        print("\n" + "-" * 58)
-        print("  【阶段零】流程准备（打开网站 → 保存 cookie/缓存）")
-        print("-" * 58)
-        try:
-            from xyxbot import login as _L  # ★ 绝对导入：本文件在 xyxbot.ai 下，
-            #   `from . import login` 会指向 xyxbot.ai.login（不存在）——
-            #   拆分前 ai.py 在 xyxbot/ 下才对。tests/test_imports_resolve.py 守住这类回归。
-            app = prepare_app
-            if app is None:
-                # 没有 App 就跳过（prepare 需要 app.context 才能导 state）
-                st = _L.is_ready()
-                print(f"[auto] 未提供 App，仅做本地检查：{st['message']}")
-            else:
-                r0 = _L.prepare_session(app, save=True, auto=True,
-                                        wait_seconds=0, interactive=True)
-                if not r0["ok"]:
-                    print(f"[auto] ✗ 准备未完成：{r0['message']}")
-                    result["prepare"] = r0
-                    result["reason"] = f"流程准备未完成：{r0['message']}"
-                    return result
-                result["prepare"] = r0
-                print("[auto] ✓ 准备就绪")
-        except Exception as e:
-            print(f"[auto] ⚠ 准备阶段异常（忽略，继续）：{e}")
+    if not _stage_prepare(prepare, prepare_app, result):
+        return result
 
-    # ---- 记录采纳前正文（用来判断正文真的变了） ----
-    if not editor_ready(page, need_text=True):
-        # ★★ 根因修复（2026-10-03）：
-        #   之前 `else: open_chapter(page)`（无参）会打开「倒序列表第0个 = 最新章」，
-        #   导致「第1章的内容被写进第4章」这种错位。
-        #   现在：
-        #     - 指定了 chapter → 打开它
-        #     - 没指定 → 打开「第1章」（最小章号），绝不切到最新章
-        if chapter:
-            open_chapter(page, which=chapter)
-        else:
-            nos = chapter_numbers(page)
-            first = min(nos) if nos else 1
-            print(f"[auto] 未指定章节，打开第{first}章（最小章号，避免切到最新章）")
-            open_chapter(page, which=f"第{first}章")
+    # ---- 打开目标章 + 记录采纳前正文（用来判断正文真的变了）----
+    _open_target_chapter(page, chapter)
     # ★★ 两个口径分开（2026-10-06）：
     #   · _raw_before = 原始长度（含换行）→ 唯一用途：给 wait_body_change
     #     判「正文变了没」（最灵敏，不受口径影响）
@@ -523,49 +484,8 @@ def ai_auto_chapter(page: Page,
     print(f"[auto] 起始正文：{body_before} 字")
 
     # ================= 阶段一：续写 =================
-    print("\n" + "-" * 58)
-    print("  【阶段一】AI 续写正文")
-    print("-" * 58)
-
-    # ★★ 进入续写前的**状态诊断**（2026-10-05 新增，定位「下一章点续写就报错」）
-    #   用户报：「生成某一章没事，下一章一点 AI 续写正文就出错，
-    #            提到'字数'、'已满足'之类」。
-    #   最可疑的路径：上一章的残留弹窗/结果页没清干净 ⇒
-    #     gen_finished 一进来就是 True ⇒ wait_generation 立刻返回
-    #     ⇒ 拿旧字数当本轮结果 ⇒ 去点不存在的「采纳使用」。
-    #   把这几项状态**显式打出来**，下次复现时日志里就有证据。
-    try:
-        _diag_gen_fin = gen_finished(page)
-        _diag_stale = _stale_result_present(page)
-        _diag_dlg = continue_dialog_open(page)
-        _diag_start_btn = _has_start_button(page)
-        _diag_wc = get_gen_word_count(page)
-        print(f"[auto][diag] 进入续写前状态："
-              f"结果页={_diag_gen_fin} 残留={_diag_stale} "
-              f"续写弹窗={_diag_dlg} 开始按钮={_diag_start_btn} "
-              f"读到的字数={_diag_wc} "
-              f"| 区间={min_words}~{max_words} 重试={max_retry}")
-
-        # ★★★ 主动清理（2026-10-05，用户实测日志定位）：
-        #   用户第2章日志：进入时「续写弹窗=True」但里面**没有开始按钮**
-        #   ⇒ 上一章残留物没清干净 ⇒ 后面 start_generate「找不到目标」。
-        #   这里在进续写之前**主动清一次**：
-        #     · 完成态结果页 → 关掉（_close_stale_result）
-        #     · 有续写弹窗字样但没有「开始 AI 续写」按钮 → 假弹窗，关掉
-        if _diag_gen_fin or _diag_stale:
-            print("[auto][diag] ⚠ 进入时就看到'完成态'结果页 → 主动关掉"
-                  "（这是上一章残留，留着会污染本轮判定）")
-            _close_stale_result(page)
-        if _diag_dlg and not _diag_start_btn:
-            print("[auto][diag] ⚠ 进入时有一个'续写弹窗'但**没有开始按钮**"
-                  "（假弹窗/残页）→ 主动关掉")
-            _close_any_continue_dialog(page)
-            if _fake_continue_dialog_present(page) or continue_dialog_open(page):
-                print("[auto][diag] ⚠ 关不干净 → 再补一次")
-                _close_stale_result(page)
-                _close_any_continue_dialog(page)
-    except Exception as _e:
-        print(f"[auto][diag] 状态诊断失败（忽略）：{_e}")
+    _stage("一", "AI 续写正文")
+    _pre_continue_cleanup(page, min_words, max_words, max_retry)
 
     gen_ok = ai_continue(
         page,
@@ -597,25 +517,7 @@ def ai_auto_chapter(page: Page,
     if close_dialog:
         close_continue_dialog(page)
 
-    # ★ 效率改造（2026-10-04 实测）：原来是固定 `time.sleep(settle=2.0)`，
-    #   每章白等 2 秒。而且紧随其后的 `wait_body_change()` 本来就在轮询
-    #   「正文写入」，所以那 2 秒是**重复等待**。
-    #   现在把 settle 改成**有上限的非阻塞等待**：正文一变就立刻继续，
-    #   没变也最多等 settle 秒（上限与旧行为一致，所以只会更快、不会更差）。
-    if settle and settle > 0:
-        _sr = wait_until(
-            lambda: get_body_text(page).strip() != "" and
-            len(get_body_text(page)) != _raw_before,      # ★ 原始长度判据
-            timeout=float(settle), interval=0.06, desc="等正文写入(settle)")
-        if _sr.ok:
-            print(f"[auto] ✓ 正文已写入（{_sr.elapsed:.2f}s，settle 提前结束）")
-        else:
-            print(f"[auto]   settle 用满 {settle:.1f}s，交给 wait_body_change 继续等")
-
-    # 等正文真的变了（采纳生效）
-    # ★ before_len 用**原始长度**（判据）、before_words 用**站点口径**（展示）
-    new_len = wait_body_change(page, before_len=_raw_before,
-                               before_words=body_before, timeout=25.0)
+    new_len = _wait_body_written(page, _raw_before, body_before, settle)
     result["body"] = new_len
     if new_len <= 0:
         print("[auto] ✗ 正文为空，无法审稿，终止")
@@ -635,40 +537,14 @@ def ai_auto_chapter(page: Page,
         return result
 
     # ================= 阶段三：审稿 =================
-    print("\n" + "-" * 58)
-    print("  【阶段三】AI 审稿")
-    print("-" * 58)
+    _stage("三", "AI 审稿")
 
     # ★★ 审稿前校验章号（用户问「你续写完了，你知道是哪一章吗？」）
-    #   审稿作用在「编辑器当前打开的章」。若中途站点自己跳了章
-    #   （例：自动新建章节后会跳到新章），就会审错章。
-    #   这里显式确认一次；不匹配就切回目标章，切不动才放弃。
-    if chapter:
-        want_no = -1
-        m = re.search(r"第\s*(\d+)\s*章", chapter)
-        if m:
-            want_no = int(m.group(1))
-        if want_no > 0:
-            cur_no = current_chapter_no(page)
-            if cur_no == want_no:
-                print(f"[auto] ✓ 审稿前核对：当前正是第{want_no}章")
-            elif cur_no < 0:
-                print("[auto] ⚠ 读不出当前章号（无 active 标记）→ 继续")
-            else:
-                print(f"[auto] ⚠ 当前是第{cur_no}章，但目标是第{want_no}章"
-                      f"（续写后站点跳章了？）→ 切回")
-                open_chapter(page, which=chapter, wait=2.0)
-                read_body_settled(page, timeout=8.0)
-                back_no = current_chapter_no(page)
-                if back_no == want_no:
-                    print(f"[auto] ✓ 已切回第{want_no}章")
-                else:
-                    print(f"[auto] ✗ 切不回第{want_no}章（现为第{back_no}章）"
-                          f"→ 终止，避免审错章")
-                    result["reason"] = (f"审稿前章节错位：目标第{want_no}章，"
-                                        f"实际第{back_no}章")
-                    _cleanup_tail()      # ★ 失败更要清（弹窗多半正卡在异常态）
-                    return result
+    chapter_ok, chapter_why = _ensure_target_chapter(page, chapter)
+    if not chapter_ok:
+        result["reason"] = chapter_why
+        _cleanup_tail()              # ★ 失败更要清（弹窗多半正卡在异常态）
+        return result
 
     rev_ok = ai_review(
         page,
@@ -701,12 +577,7 @@ def ai_auto_chapter(page: Page,
     #   （无论本章成功还是失败都要清，才能保证"下一章必报错"不再出现。）
     _cleanup_tail()
 
-    print("\n" + "=" * 58)
-    print("  ★ 一章自动流程结束")
-    print(f"    续写结果 : {result['gen'].get('reason') if result['gen'] else '失败'}")
-    print(f"    正文     : {body_before} → {result['body']} 字")
-    print(f"    审稿替换 : {'✓ 完成' if rev_ok else '✗ 失败'}")
-    print("=" * 58)
+    _print_chapter_summary(result, body_before)
     return result
 
 
@@ -966,3 +837,195 @@ def ai_batch_chapters(page: Page,
     return {"total": len(results), "ok": ok_cnt,
             "failed": failed, "results": results,
             "aborted": aborted, "elapsed": elapsed_all}
+
+
+# =============================================================================
+#  流程内部步骤（2026-10-07 从 ai_auto_chapter 里抽出来）
+#
+#  抽出原则：**只搬位置，不改内容** —— 日志文案、超时值、判断条件、
+#  以及注释里那些"为什么这么写"的实测记录，全部原样跟着走。
+#  目的：让 ai_auto_chapter 读起来是"四个阶段"而不是 345 行的连续体，
+#  并且这些步骤能被 ai_continue / ai_review / ai_batch_chapters 复用。
+#  等价性由 tools 里的 flow_equiv 静态比对守着（递归展开后逐项对比调用序列）。
+# =============================================================================
+
+def _stage(label: str, title: str) -> None:
+    """打印阶段横幅（纯格式）。"""
+    print("\n" + "-" * 58)
+    print(f"  【阶段{label}】{title}")
+    print("-" * 58)
+
+
+def _stage_prepare(prepare: bool, prepare_app, result: dict) -> bool:
+    """阶段零：流程准备（可选）。返回 False 表示应当终止本次流程。
+
+    ★ 用户需求（2026-10-03）：一条龙之前先做「打开网站 + 保存 cookie/缓存」。
+      UI 里已经单独给了「① 打开网站并保存」按钮；这里提供程序化入口，
+      方便 CLI / 任务直接传 prepare=True。
+    """
+    if not prepare:
+        return True
+    _stage("零", "流程准备（打开网站 → 保存 cookie/缓存）")
+    try:
+        from xyxbot import login as _L
+        app = prepare_app
+        if app is None:
+            # 没有 App 就跳过（prepare 需要 app.context 才能导 state）
+            st = _L.is_ready()
+            print(f"[auto] 未提供 App，仅做本地检查：{st['message']}")
+        else:
+            r0 = _L.prepare_session(app, save=True, auto=True,
+                                    wait_seconds=0, interactive=True)
+            if not r0["ok"]:
+                print(f"[auto] ✗ 准备未完成：{r0['message']}")
+                result["prepare"] = r0
+                result["reason"] = f"流程准备未完成：{r0['message']}"
+                return False
+            result["prepare"] = r0
+            print("[auto] ✓ 准备就绪")
+    except Exception as e:
+        print(f"[auto] ⚠ 准备阶段异常（忽略，继续）：{e}")
+    return True
+
+
+def _open_target_chapter(page: Page, chapter: str = "") -> None:
+    """确保编辑器里打开的是**目标章**（而不是站点默认的最新章）。
+
+    ★★ 根因修复（2026-10-03）：
+      之前 `else: open_chapter(page)`（无参）会打开「倒序列表第0个 = 最新章」，
+      导致「第1章的内容被写进第4章」这种错位。现在：
+        - 指定了 chapter → 打开它
+        - 没指定 → 打开「第1章」（最小章号），绝不切到最新章
+    """
+    if editor_ready(page, need_text=True):
+        return
+    if chapter:
+        open_chapter(page, which=chapter)
+    else:
+        nos = chapter_numbers(page)
+        first = min(nos) if nos else 1
+        print(f"[auto] 未指定章节，打开第{first}章（最小章号，避免切到最新章）")
+        open_chapter(page, which=f"第{first}章")
+
+
+def _pre_continue_cleanup(page: Page, min_words: int, max_words: int,
+                          max_retry: int) -> None:
+    """进入续写前的状态诊断 + 主动清理。
+
+    ★★ 进入续写前的**状态诊断**（2026-10-05 新增，定位「下一章点续写就报错」）
+      用户报：「生成某一章没事，下一章一点 AI 续写正文就出错，提到'字数'、'已满足'之类」。
+      最可疑的路径：上一章的残留弹窗/结果页没清干净 ⇒
+        gen_finished 一进来就是 True ⇒ wait_generation 立刻返回
+        ⇒ 拿旧字数当本轮结果 ⇒ 去点不存在的「采纳使用」。
+      把这几项状态**显式打出来**，下次复现时日志里就有证据。
+
+    ★★★ 主动清理（2026-10-05，用户实测日志定位）：
+      用户第2章日志：进入时「续写弹窗=True」但里面**没有开始按钮**
+      ⇒ 上一章残留物没清干净 ⇒ 后面 start_generate「找不到目标」。
+      这里在进续写之前**主动清一次**：
+        · 完成态结果页 → 关掉（_close_stale_result）
+        · 有续写弹窗字样但没有「开始 AI 续写」按钮 → 假弹窗，关掉
+    """
+    try:
+        _diag_gen_fin = gen_finished(page)
+        _diag_stale = _stale_result_present(page)
+        _diag_dlg = continue_dialog_open(page)
+        _diag_start_btn = _has_start_button(page)
+        _diag_wc = get_gen_word_count(page)
+        print(f"[auto][diag] 进入续写前状态："
+              f"结果页={_diag_gen_fin} 残留={_diag_stale} "
+              f"续写弹窗={_diag_dlg} 开始按钮={_diag_start_btn} "
+              f"读到的字数={_diag_wc} "
+              f"| 区间={min_words}~{max_words} 重试={max_retry}")
+
+        if _diag_gen_fin or _diag_stale:
+            print("[auto][diag] ⚠ 进入时就看到'完成态'结果页 → 主动关掉"
+                  "（这是上一章残留，留着会污染本轮判定）")
+            _close_stale_result(page)
+        if _diag_dlg and not _diag_start_btn:
+            print("[auto][diag] ⚠ 进入时有一个'续写弹窗'但**没有开始按钮**"
+                  "（假弹窗/残页）→ 主动关掉")
+            _close_any_continue_dialog(page)
+            if _fake_continue_dialog_present(page) or continue_dialog_open(page):
+                print("[auto][diag] ⚠ 关不干净 → 再补一次")
+                _close_stale_result(page)
+                _close_any_continue_dialog(page)
+    except Exception as _e:
+        print(f"[auto][diag] 状态诊断失败（忽略）：{_e}")
+
+
+def _wait_body_written(page: Page, _raw_before: int, body_before: int,
+                       settle: float) -> int:
+    """阶段二：关弹窗之后，等正文真的写进编辑器。返回新的原始长度。
+
+    参数名沿用项目约定（`_raw_before` = 含换行的原始长度，是唯一的**变更判据**；
+    `body_before` = 站点口径字数，只用于展示）—— 这个口径差别是踩过坑的，
+    见 `ai_auto_chapter` 里"两个口径分开"那段注释。
+
+    ★ 效率改造（2026-10-04 实测）：原来是固定 `time.sleep(settle=2.0)`，
+      每章白等 2 秒。而且紧随其后的 `wait_body_change()` 本来就在轮询
+      「正文写入」，所以那 2 秒是**重复等待**。
+      现在把 settle 改成**有上限的非阻塞等待**：正文一变就立刻继续，
+      没变也最多等 settle 秒（上限与旧行为一致，所以只会更快、不会更差）。
+    """
+    if settle and settle > 0:
+        _sr = wait_until(
+            lambda: get_body_text(page).strip() != "" and
+            len(get_body_text(page)) != _raw_before,      # ★ 原始长度判据
+            timeout=float(settle), interval=0.06, desc="等正文写入(settle)")
+        if _sr.ok:
+            print(f"[auto] ✓ 正文已写入（{_sr.elapsed:.2f}s，settle 提前结束）")
+        else:
+            print(f"[auto]   settle 用满 {settle:.1f}s，交给 wait_body_change 继续等")
+
+    # 等正文真的变了（采纳生效）
+    # ★ before_len 用**原始长度**（判据）、before_words 用**站点口径**（展示）
+    return wait_body_change(page, before_len=_raw_before,
+                            before_words=body_before, timeout=25.0)
+
+
+def _ensure_target_chapter(page: Page, chapter: str = "") -> tuple:
+    """阶段三之前：确认站点的**当前章**就是目标章。返回 (ok, 失败原因)。
+
+    ★★ 审稿前校验章号（用户问「你续写完了，你知道是哪一章吗？」）
+      审稿作用在「编辑器当前打开的章」。若中途站点自己跳了章
+      （例：自动新建章节后会跳到新章），就会审错章。
+      这里显式确认一次；不匹配就切回目标章，切不动才放弃。
+    """
+    if not chapter:
+        return True, ""
+    want_no = -1
+    m = re.search(r"第\s*(\d+)\s*章", chapter)
+    if m:
+        want_no = int(m.group(1))
+    if want_no <= 0:
+        return True, ""
+    cur_no = current_chapter_no(page)
+    if cur_no == want_no:
+        print(f"[auto] ✓ 审稿前核对：当前正是第{want_no}章")
+        return True, ""
+    if cur_no < 0:
+        print("[auto] ⚠ 读不出当前章号（无 active 标记）→ 继续")
+        return True, ""
+    print(f"[auto] ⚠ 当前是第{cur_no}章，但目标是第{want_no}章"
+          f"（续写后站点跳章了？）→ 切回")
+    open_chapter(page, which=chapter, wait=2.0)
+    read_body_settled(page, timeout=8.0)
+    back_no = current_chapter_no(page)
+    if back_no == want_no:
+        print(f"[auto] ✓ 已切回第{want_no}章")
+        return True, ""
+    print(f"[auto] ✗ 切不回第{want_no}章（现为第{back_no}章）"
+          f"→ 终止，避免审错章")
+    return False, (f"审稿前章节错位：目标第{want_no}章，"
+                   f"实际第{back_no}章")
+
+
+def _print_chapter_summary(result: dict, body_before: int) -> None:
+    """一章结束时的汇总（纯格式）。"""
+    print("\n" + "=" * 58)
+    print("  ★ 一章自动流程结束")
+    print(f"    续写结果 : {result['gen'].get('reason') if result['gen'] else '失败'}")
+    print(f"    正文     : {body_before} → {result['body']} 字")
+    print(f"    审稿替换 : {'✓ 完成' if result['review'] else '✗ 失败'}")
+    print("=" * 58)
