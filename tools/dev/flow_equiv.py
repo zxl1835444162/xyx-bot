@@ -33,6 +33,7 @@ TARGETS = {
     "xyxbot/ai/shortcuts.py": ["pick_shortcut", "wait_shortcut_loaded",
                                "open_shortcut_panel"],
     "xyxbot/ai/model.py": ["select_model"],
+    "xyxbot/books.py": ["open_book", "create_book", "close_activity_modal"],
     "xyxbot/ui/pages/ai_flow.py": ["_ai_go", "_ai_review_go", "_ai_both_go", "_ai_batch_go"],
     # ★ 跑章页已拆成包：这些方法名现在分布在不同子模块里
     "xyxbot/ui/pages/run/*.py": [
