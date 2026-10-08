@@ -132,6 +132,73 @@ def set_associate_level(page: Page, level: str = "正常",
 
 
 
+def _open_model_panel(page: Page, container: str, panel: str):
+    """① 打开模型面板：找「模型行」→ 点开 → 等根级弹窗出现。
+
+    返回 `(opened, scope)`；找不到模型选择器时返回 None（调用方应中止）。
+
+    ★ 用 `container` 找"模型行" —— 「点哪儿展开」由入口决定（续写弹窗 / 审稿抽屉不同）。
+    ★ 短超时 + JS 降级（残留遮罩会拦原生点击，长超时只会白等）。
+    ★ 等根级模型弹窗出现（它是独立的，跟入口平级）
+      ★ 效率改造：原来「点一下 → sleep 0.6 → 再轮询 12×0.4s = 最多 4.8s」，
+        合计最多 5.4 秒。现在合并成**一次高频条件等待**：一出现就继续。
+    """
+    loc = None
+    for sel in AI_SELECTORS["model_selection"]:
+        real = sel.replace(".n-modal", container) if ".n-modal" in sel else sel
+        try:
+            cand = page.locator(real).first
+            if cand.is_visible(timeout=1500):
+                loc = cand
+                break
+        except Exception:
+            continue
+    if loc is None:
+        # 兜底：实在找不到，就在 panel 里找
+        for sel in AI_SELECTORS["model_selection"]:
+            real = sel.replace(".n-modal", panel) if ".n-modal" in sel else sel
+            try:
+                cand = page.locator(real).first
+                if cand.is_visible(timeout=1500):
+                    loc = cand
+                    break
+            except Exception:
+                continue
+    if loc is None:
+        print("[ai] ✗ 找不到模型选择器")
+        _shot(page, "ai_model_selector_missing")
+        return None
+    before = current_model(page, container=panel)
+    print(f"[ai] 当前模型：{before or '(空)'}")
+
+    if loc.is_visible():
+        if _safe_click(loc, label="展开模型面板"):
+            print("[ai] ✓ 已展开模型面板")
+        else:
+            print("[ai] ⚠ 展开模型面板点击失败，继续尝试")
+    else:
+        print("[ai] ⚠ 模型选择器不可见，尝试直接点")
+        _safe_click(loc, label="展开模型面板(不可见)")
+
+    MODEL_MODAL = ".n-modal.model-picker-modal"
+
+    def _modal_visible() -> bool:
+        try:
+            m = page.locator(MODEL_MODAL).first
+            return bool(m.count()) and m.is_visible(timeout=60)
+        except Exception:
+            return False
+
+    opened = wait_until(_modal_visible, timeout=5.0, interval=0.05,
+                        desc="模型弹窗出现").ok
+    scope = MODEL_MODAL if opened else panel
+    if opened:
+        print("[ai] ✓ 模型弹窗已就绪（根级 .model-picker-modal）")
+    else:
+        print("[ai] ⚠ 没等到模型弹窗，退回原容器查找")
+    return opened, scope
+
+
 def select_model(page: Page, model: str = "细腻版",
                  associate: str = "正常",
                  container: str = ".n-modal",
@@ -195,63 +262,10 @@ def select_model(page: Page, model: str = "细腻版",
         return True
 
     # ① 打开模型面板（★ 用 container，因为「点哪儿展开」由入口决定）
-    loc = None
-    for sel in AI_SELECTORS["model_selection"]:
-        real = sel.replace(".n-modal", container) if ".n-modal" in sel else sel
-        try:
-            cand = page.locator(real).first
-            if cand.is_visible(timeout=1500):
-                loc = cand
-                break
-        except Exception:
-            continue
-    if loc is None:
-        # 兜底：实在找不到，就在 panel 里找
-        for sel in AI_SELECTORS["model_selection"]:
-            real = sel.replace(".n-modal", panel) if ".n-modal" in sel else sel
-            try:
-                cand = page.locator(real).first
-                if cand.is_visible(timeout=1500):
-                    loc = cand
-                    break
-            except Exception:
-                continue
-    if loc is None:
-        print("[ai] ✗ 找不到模型选择器")
-        _shot(page, "ai_model_selector_missing")
+    _panel = _open_model_panel(page, container, panel)
+    if _panel is None:
         return False
-    before = current_model(page, container=panel)
-    print(f"[ai] 当前模型：{before or '(空)'}")
-
-    # ★ 短超时 + JS 降级（残留遮罩会拦原生点击，长超时只会白等）
-    if loc.is_visible():
-        if _safe_click(loc, label="展开模型面板"):
-            print("[ai] ✓ 已展开模型面板")
-        else:
-            print("[ai] ⚠ 展开模型面板点击失败，继续尝试")
-    else:
-        print("[ai] ⚠ 模型选择器不可见，尝试直接点")
-        _safe_click(loc, label="展开模型面板(不可见)")
-
-    # ★ 等根级模型弹窗出现（它是独立的，跟入口平级）
-    #   ★ 效率改造：原来「点一下 → sleep 0.6 → 再轮询 12×0.4s = 最多 4.8s」，
-    #     合计最多 5.4 秒。现在合并成**一次高频条件等待**：一出现就继续。
-    MODEL_MODAL = ".n-modal.model-picker-modal"
-
-    def _modal_visible() -> bool:
-        try:
-            m = page.locator(MODEL_MODAL).first
-            return bool(m.count()) and m.is_visible(timeout=60)
-        except Exception:
-            return False
-
-    opened = wait_until(_modal_visible, timeout=5.0, interval=0.05,
-                        desc="模型弹窗出现").ok
-    scope = MODEL_MODAL if opened else panel
-    if opened:
-        print("[ai] ✓ 模型弹窗已就绪（根级 .model-picker-modal）")
-    else:
-        print("[ai] ⚠ 没等到模型弹窗，退回原容器查找")
+    opened, scope = _panel
 
     # ② 点左栏分类 button（注意：分类是 button，不是 span）
     cat = page.locator(f"{scope} button").filter(has_text=model)
