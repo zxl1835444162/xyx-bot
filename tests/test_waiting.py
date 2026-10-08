@@ -232,6 +232,11 @@ check_true(f"wait_review_done poll 默认 {_wr_poll} ≤0.5s", _wr_poll <= 0.5)
 check_true(f"wait_shortcut_loaded poll 默认 {_ws_poll} ≤0.2s", _ws_poll <= 0.2)
 
 # 关键函数必须真的用条件等待
+# ★ 2026-10-07：条件等待被抽成具名步骤后（如 fill_review_text →
+#   _wait_review_text_settled），"这个函数里必须有 wait_until 字样"就不再等价于
+#   "这条路径用条件等待了"。所以这里两样都查：调用处**点名**那个步骤，
+#   并且那个步骤自己必须真的用条件等待 —— 意图不变（不许退回固定 sleep），
+#   而且比原来更明确（能看出是哪一步在等）。
 for fn, needle in [
     ("relate_chapters", "wait_until"),
     ("wait_generation", "wait_until"),
@@ -239,7 +244,8 @@ for fn, needle in [
     ("wait_body_change", "wait_until"),
     ("select_all_body", "wait_until"),
     ("replace_review_result", "wait_until"),
-    ("fill_review_text", "wait_until"),
+    ("fill_review_text", "_wait_review_text_settled"),
+    ("_wait_review_text_settled", "wait_until"),
     ("pick_review_requirement", "wait_until"),
     ("dismiss_dialogs", "wait_gone"),
 ]:

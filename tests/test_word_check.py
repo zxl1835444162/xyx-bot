@@ -250,8 +250,8 @@ check_true("待审文本填失败会终止审稿",
            "ai_review_fill_failed" in ai_src)
 
 # _settle 判据强化（长度 + 前缀，而不是只比尾部 40 字）
-check_true("_settle 接受 head/want_len 参数",
-           "def _settle(expected: str, head: str, want_len: int)" in ai_src)
+check_true("落盘判据接受 head/want_len 参数（提取后叫 _wait_review_text_settled）",
+           "def _wait_review_text_settled(page: Page, want_len: int, head: str)" in ai_src)
 check_true("_settle 会校验长度容差",
            "tol = max(5, int(want_len * 0.02))" in ai_src)
 check_true("_settle 会校验前缀",
