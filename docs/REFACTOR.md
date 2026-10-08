@@ -412,3 +412,59 @@ def ai_auto_chapter( / def _visible( / def wait_generation( 各出现 1 次
 | `diag_login.py`（根） | `tools/diag/diag_login.py` |
 | `smoke_gui.py`（根） | `tools/dev/smoke_gui.py` |
 | `PROJECT_UNDERSTANDING.md` 等（根） | `docs/PROJECT_UNDERSTANDING.md` 等 |
+
+---
+
+## 第二阶段：给「一条龙」瘦身（2026-10-07 起，共 10 批）
+
+> 用户原话：「现在框架太厚，就主要是这个，一条龙的这个流程，进行一个优化，不要太臃肿」。
+> 目标很明确：**不改行为，只减层级与重复**。验收尺子加了第二把：
+> `tools/dev/flow_equiv.py ops`（只看"对站点的操作"的调用序列，逐项比对）。
+
+### 做法（每批都一样）
+
+1. 先量：函数按 AST 摊开，看**顶层块**与它自己的分节注释 → 找可切的边界
+2. 再切：**整段搬运**（含上方注释、文档串、超时值），只搬位置不改内容
+3. 后验：`flow_equiv.py ops` 比对"操作序列" + `tests/run_all.py` 全绿 + `selftest`
+4. 提交：一次一批，消息里写清"改了什么 / 为什么 / 验收输出"
+
+### 战果（函数级）
+
+| 函数 | 起点 | 现在 | 切成哪些步骤 |
+|---|---|---|---|
+| `ai.py`（拆成 12 个子模块） | **5378** | 最大 `flows.py` 1054 | selectors/elements/dialog/current/model/shortcuts/relate/body/generate/chapters/review/flows |
+| `ui/pages/run.py`（拆成 6 个 Mixin） | **1286** | 最大 `form.py` 605 | page / form / precheck / control / progress / result |
+| `_run_build_params` | 212 | **10** | 8 个 `_run_params_*` |
+| `ai_auto_chapter`（一条龙主流程） | 347 | **218** | 阶段零/一/二/三 + `_open_target_chapter` / `_pre_continue_cleanup` / `_wait_body_written` / `_ensure_target_chapter` / `_print_chapter_summary` |
+| `pick_shortcut`（选提示词） | 311 | **211** | `_shortcut_prepare` / `_shortcut_narrow_by_search` / `_click_shortcut_row` / `_wait_shortcut_panel_closed` / `read_selected_shortcut` / `_shortcut_row_matches` |
+| `select_model`（选模型） | 252 | **129** | `_open_model_panel` / `_pick_model_category` / `_pick_model_card` |
+| `ai_batch_chapters`（批量主循环） | 255 | **241** | `_skip_missing` / `_batch_chapter_outcome` |
+| `open_book`（打开作品） | 204 | **113** | `_try_click_book_card` / `_click_book_and_retry` / `_ensure_book_url` / `_editor_usable` |
+| `ai_continue`（续写入口） | 165 | **133** | `_ensure_continue_dialog_clean` |
+| `set_associate_level`（联想档位） | 111 | **54** | `_open_associate_slider` / `_associate_mark_x` / `_drag_associate_handle` / `read_associate_level` / `_collapse_associate_popover` |
+| `open_review_pane`（开抽屉） | 107 | **75** | `_pane_body_is_current` / `_click_review_button` |
+| `fill_review_text`（填待审文本） | 107 | **59** | `_wait_review_text_settled` / `_compose_review_input` |
+| `pick_review_requirement`（选审稿要求） | 101 | **44** | `_switch_review_tab` / `_open_review_req_row` |
+| `replace_review_result`（替换落盘） | 103 | **51** | `_click_replace_button` / `_js_click_replace_button` |
+
+### 过程中挖出并修掉的真 bug
+
+| # | 现象 | 根因 | 处理 |
+|---|---|---|---|
+| 1 | `prepare=True` 的路径会崩 | 拆分后 `ai/flows.py` 里 `from . import login` 指向不存在的 `xyxbot.ai.login` | 改绝对导入 + 新增 `tests/test_imports_resolve.py`（全包 62 处相对导入必须可解析，含灵敏度自检） |
+| 2 | 用户报「点击提示词后有时候根本没选上」 | `_matches()` 里的 `after_core` **从未定义** → 该走"回读没对上 → 延迟重试"的路径直接 `NameError` 崩掉 | 按原意补上核心词比较 + 新增 `tools/audit/undefined_names.py` 与 `tests/test_undefined_names.py`（全包 68 文件扫描 + 灵敏度自检） |
+
+### 流程教训（写给自己，也留给以后接手的人）
+
+1. **测试全绿 ≠ 没丢东西**：第一次拆 `ai.py` 丢了 181 行注释（AST 的 `lineno` 不含上方注释块）。
+   → 拆完必须做**文本级比对**：注释覆盖率 + 代码行双向 diff + 顶层定义去重。
+2. **提交必须等测试退出码**：有一次我串了命令、没检查返回值就提交，留下两条红断言。
+   → 现在提交前先判 `tests/run_all.py` 的输出；不绿就不提交。
+3. **别让"写提交信息"排在闸门之后**：有一次闸门拦住了提交（正确），
+   但脚本里 `exit 1` 先执行，提交信息文件还是上一轮的内容 —— 于是下一条提交
+   （`a5693d0`）带上了上一轮的说明。**它实际包含的是**：`review.py` 的
+   `pick_review_requirement` 44 行 / `replace_review_result` 51 行两处提取
+   + `tests/test_waiting` 的条件等待断言同步。历史已推送就不改写，
+   在这里把记录补齐。
+
+---
