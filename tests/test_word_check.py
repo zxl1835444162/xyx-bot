@@ -540,8 +540,11 @@ check_true("pick_shortcut 调用时把 keyword 传给等待函数",
            "wait_shortcut_loaded(page, timeout=8.0, keyword=keyword)" in ai_src)
 check_true("找不到目标时会补等+滚动列表重试（不再一次放弃）",
            "补等并滚动列表" in ai_src)
-check_true("pick_shortcut 点击后回读确认（续写/审稿各读各自那一行）",
-           "def _read_back()" in ai_src and "current_review_requirement(page)" in ai_src)
+check_true("pick_shortcut 点击后回读确认（续写读续写行 / 审稿读审稿行）",
+           "def read_selected_shortcut(" in ai_src        # 提取后的回读函数
+           and "current_shortcut(page)" in ai_src
+           and "current_review_requirement(page)" in ai_src
+           and "if verify_row:" in ai_src)
 check_true("回读未命中 → 延迟后重试点击一次（用户要求的那「一小点延迟」）",
            "延迟后重试点击一次" in ai_src and "time.sleep(0.6)" in ai_src)
 check_true("审稿场景也回读（老代码 verify_row=False 完全不回读）",
