@@ -309,6 +309,19 @@ class RunFormMixin:
         self._run_col_params = col
         b = col.body
 
+        # 下面每段各管一组控件。**顺序 = 界面从上到下的顺序，不要调换**：
+        # Tk 里控件的创建顺序决定它们在父容器里的叠放次序。
+        self._run_params_shortcut(b)
+        self._run_params_words(b)
+        self._run_params_review_model(b)
+        self._run_params_review_instruction(b)
+        self._run_params_review_switches(b)
+        self._run_params_solo_chapter(b)
+        self._run_params_wrapper(b)
+        self._run_params_solo_tools(b)
+
+    def _run_params_shortcut(self, b):
+        """续写提示词（快捷选项关键词）。"""
         # ---- 续写 ----
         r1 = tk.Frame(b, bg=COLOR["bg_card"])
         r1.pack(fill="x", pady=(8, 0))
@@ -329,6 +342,8 @@ class RunFormMixin:
         except Exception:
             pass
 
+    def _run_params_words(self, b):
+        """生成字数（自动采纳 + 下限/上限/最多重生成）。"""
         # ---- 字数 ----
         r2 = tk.Frame(b, bg=COLOR["bg_card"])
         r2.pack(fill="x", pady=(14, 0))
@@ -364,6 +379,8 @@ class RunFormMixin:
                     "（字数要求可以写在上面③的指令里）",
                  size=8).pack(anchor="w", pady=(5, 0))
 
+    def _run_params_review_model(self, b):
+        """审稿模型 / 卡片 / 联想 + 审稿要求。"""
         # ---- 审稿 ----
         r3 = tk.Frame(b, bg=COLOR["bg_card"])
         r3.pack(fill="x", pady=(14, 0))
@@ -404,6 +421,8 @@ class RunFormMixin:
         except Exception:
             pass
 
+    def _run_params_review_instruction(self, b):
+        """追加指令（拼在待审正文前面）。"""
         # 追加指令
         r4 = tk.Frame(b, bg=COLOR["bg_card"])
         r4.pack(fill="x", pady=(10, 0))
@@ -419,6 +438,8 @@ class RunFormMixin:
         self._rv_instr_text.pack(fill="x", pady=(4, 0))
         bind_wheel(self._rv_instr_text, self._on_mousewheel)
 
+    def _run_params_review_switches(self, b):
+        """替换前全选 / 完成后替换 / 审稿超时。"""
         # 开关
         r5 = tk.Frame(b, bg=COLOR["bg_card"])
         r5.pack(fill="x", pady=(12, 0))
@@ -442,6 +463,8 @@ class RunFormMixin:
         except Exception:
             pass
 
+    def _run_params_solo_chapter(self, b):
+        """单章工具用的「先打开章节」（兼容字段）。"""
         # 兼容字段：单章流程要的「先打开章节」输入框
         r6 = tk.Frame(b, bg=COLOR["bg_card"])
         r6.pack(fill="x", pady=(8, 0))
@@ -451,6 +474,8 @@ class RunFormMixin:
             r6, placeholder="留空=第1章", icon="☰", width=180, height=34)
         self._rv_chapter_entry.pack(side="left", padx=(4, 0))
 
+    def _run_params_wrapper(self, b):
+        """统一前缀 / 后缀（默认收起）。"""
         # ---- 统一前后缀（默认收起）----
         r7 = tk.Frame(b, bg=COLOR["bg_card"])
         r7.pack(fill="x", pady=(14, 0))
@@ -470,6 +495,8 @@ class RunFormMixin:
         self._wrap_widgets = [wr]
         wr.pack_forget()
 
+    def _run_params_solo_tools(self, b):
+        """单章工具（备用）+「续写到第几章」下拉。"""
         # ---- ★ 单章工具（备用，收进最里面）----
         col_solo = Collapsible(b, title="单章工具（备用：只跑一章）")
         col_solo.pack(fill="x", pady=(14, 0))
