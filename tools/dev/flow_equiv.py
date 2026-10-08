@@ -33,7 +33,8 @@ TARGETS = {
     "xyxbot/ai/shortcuts.py": ["pick_shortcut", "wait_shortcut_loaded",
                                "open_shortcut_panel"],
     "xyxbot/ai/model.py": ["select_model", "set_associate_level"],
-    "xyxbot/ai/review.py": [
+    # ★ 审稿原语已拆成包：目标写成 run 包里的通配（旧版会自动回退到 HEAD 的 review.py）
+    "xyxbot/ai/review/*.py": [
         "open_review_pane", "close_review_pane", "review_pane_open",
         "read_review_box", "read_body_settled", "fill_review_text",
         "pick_review_requirement", "start_review", "wait_review_done",
