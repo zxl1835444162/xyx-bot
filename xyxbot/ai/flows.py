@@ -477,7 +477,9 @@ def ai_auto_chapter(page: Page,
         print("  【阶段零】流程准备（打开网站 → 保存 cookie/缓存）")
         print("-" * 58)
         try:
-            from . import login as _L
+            from xyxbot import login as _L  # ★ 绝对导入：本文件在 xyxbot.ai 下，
+            #   `from . import login` 会指向 xyxbot.ai.login（不存在）——
+            #   拆分前 ai.py 在 xyxbot/ 下才对。tests/test_imports_resolve.py 守住这类回归。
             app = prepare_app
             if app is None:
                 # 没有 App 就跳过（prepare 需要 app.context 才能导 state）
