@@ -468,3 +468,82 @@ def ai_auto_chapter( / def _visible( / def wait_generation( 各出现 1 次
    在这里把记录补齐。
 
 ---
+
+## 第二阶段（续）：第 9 ~ 18 轮 + 收尾审计
+
+第 8 轮之前只拆到一半（`ai/` 与跑章页）；后半程把剩下的巨兽全部拆开，
+并因此**照出几个真 bug**。
+
+### 又拆开的文件
+
+| 文件 | 起点 | 现在 | 怎么拆的 |
+|---|---|---|---|
+| `ui/main_window.py` | 902 | `ui/main_window/` 5 Mixin + `NavItem`（最大 265） | 类拆分（装配器 → 窗口/滚动/顶栏/导航/运行时） |
+| `theme/widgets.py` | 742 | `theme/widgets/` 4 子模块（最大 268） | 模块拆分（按控件族） |
+| `ai/review.py` | 1020 | `ai/review/` 5 子模块（最大 321） | 模块拆分（抽屉/文本/选要求/生成/替换） |
+| `books.py` | 999 | `books/` 6 子模块（最大 280） | 模块拆分（进页/列表/打开/新建/弹窗/编辑器） |
+| `login.py` | 689 | `login/` 3 子模块（最大 305） | 模块拆分（登录态/流程/准备） |
+| `cli.py` | 726 | `cli/` 6 子模块（最大 229） | 模块拆分（19 个命令按族） |
+| `ui/pages/ai_flow.py` | 708 | `ai_flow/` 5 Mixin（最大 252） | 类拆分（共用步/续写/审稿/一条龙/批量） |
+| `ui/pages/run/form.py` | 605 | `run/form/` 4 Mixin（最大 271） | 类拆分（目标/细纲/参数/进度） |
+| `novel.py` | 854 | `novel/` 5 子模块（最大 473） | 模块拆分（正则/章节/拆分/工程/CLI） |
+
+**刻意不拆的**：`ai/flows.py`（1072）。理由：里面有模块级**可变状态**
+`LAST_DECISION`（`ai_continue` 写、`ai_auto_chapter` 读、界面也读）。
+一旦把读写分到不同模块，`from … import` 只会拿到**导入快照**，界面会读到旧值 ——
+这正是第 1 轮踩过的静默行为 bug，而 `flow_equiv ops` 只看调用、看不见它。
+**没有可信验证手段的地方，不动。**
+
+### 又瘦下来的函数（后半程）
+
+| 函数 | 起点 | 现在 | 切成哪些步骤 |
+|---|---|---|---|
+| `set_associate_level` | 111 | **54** | `_open_associate_slider` / `_associate_mark_x` / `_drag_associate_handle` / `read_associate_level` / `_collapse_associate_popover` |
+| `open_review_pane` | 107 | **75** | `_pane_body_is_current` / `_click_review_button` |
+| `fill_review_text` | 107 | **59** | `_wait_review_text_settled` / `_compose_review_input` |
+| `pick_review_requirement` | 101 | **44** | `_switch_review_tab` / `_open_review_req_row` |
+| `replace_review_result` | 103 | **51** | `_click_replace_button` / `_js_click_replace_button` |
+| `ai_review` | 154 | **129** | `_ensure_review_chapter` / `_open_review_pane_for_chapter` |
+| `close_activity_modal` | 103 | **50** | `_close_one_activity_modal` / `_activity_modal_still_there` |
+| `ai_continue` | 165 | **133** | `_ensure_continue_dialog_clean` |
+
+### ★ 这半程照出来的真 bug（都是"重构顺手照出来"型）
+
+| # | 现象 | 根因 | 为什么以前没发现 |
+|---|---|---|---|
+| 3 | `python main.py batch …` 直接崩 | `cmd_batch` 用了**没定义过**的 `max_retry`（赋值在 `cmd_auto` 里的局部变量） | GUI 走另一条路径；"未定义名"扫描器把整文件的赋值都当模块全局（跨函数误判），拆包后按文件作用域判断才照出来 |
+| 4 | 拆 `books.py` 时 `from .login import …` 指错包 | 相对导入基准从 `xyxbot` 变成 `xyxbot.books`（**函数体内联**的 import，拆分器只改写顶层） | 第 3 轮加的那道"全包相对导入必须可解析"守卫**当场抓到** |
+
+> 加上前半程的两条（内联相对导入指错包；`after_core` 未定义），这条线一共修了
+> **4 个真 bug**，其中 2 个是被自己新增的守卫抓到的 —— 守卫的价值在 15 轮后兑现。
+
+### 收尾审计（起点 `645625c` → 现在）
+
+| 指标 | 起点 | 现在 |
+|---|---|---|
+| 业务包 .py 文件数 | 62 | 113 |
+| 业务包总行数 | 19,823 | 21,298（**+7.4%**，见下） |
+| **超过 700 行的文件** | **9** | **1**（就是刻意保留的 `flows.py`） |
+| **超过 200 行的函数** | **6** | **3** |
+| 最厚文件 | `ui/pages/run.py` 1286 | `ai/flows.py` 1072 |
+| 最长函数 | `ai_auto_chapter` 345 | `ai_batch_chapters` 241 |
+
+**总行数增加是正常的、也是刻意的**：每个新模块都带自己的文档串与说明，
+抽出来的步骤函数也各带签名与文档串。换来的是"**每个文件一件事、每个函数一个职责**"，
+以及"拆分前后对站点的操作序列逐项可比"这件事本身。
+
+### 这条线留下的工具（都在仓库里）
+
+| 工具 | 作用 |
+|---|---|
+| `tools/dev/flow_equiv.py` | **操作等价校验器**：把流程函数里"对站点的操作"按求值顺序取出来逐项比对（本地 helper 递归展开、排除纯读取/日志）。`ops` 模式是每次重构的**门槛** |
+| `tools/audit/undefined_names.py` | 扫"被引用但没定义"的名字（`after_core` 那类 bug） |
+| `tests/test_imports_resolve.py` | 全包相对导入必须可解析（拆包时最容易断的契约） |
+| `tests/test_undefined_names.py` | 上一条的常驻守卫 + 灵敏度自检 |
+
+出题式的三条判据（每轮都在用）：
+1. **先过第一道门槛**：目标里有没有"一边写一边读"的模块级可变状态？有 → 不动。
+2. **拆前先备份原文件**，拆分器读备份生成（可重复生成，且不会"删了源文件后拆不出来"）。
+3. **提交前必须确认 `tests/run_all.py` 全绿**，且完整性复核（注释行 / 代码行 /
+   顶层定义）为 0 丢失 —— "测试全绿 ≠ 没丢东西"。
+
