@@ -681,6 +681,20 @@ def ai_batch_chapters(page: Page,
     failed: List[int] = []
     aborted = False
 
+    def _skip_missing(msg: str, reason: str) -> None:
+        """记一条「这一章没跑成（章节缺失）」的结果，并通知进度回调。
+
+        （原来两条分支各写一遍：自动新建失败 / 未开自动新建且章节不存在。）
+        """
+        print(msg)
+        failed.append(no)
+        results.append({"no": no, "ok": False, "reason": reason,
+                        "seconds": time.time() - t_ch})
+        _emit(no=no, total=_total, index=index, phase="done",
+              ok=False, words=0, elapsed=time.time() - t_ch,
+              reason=reason, done_count=len(results),
+              ok_count=sum(1 for x in results if x["ok"]))
+
     for no in range(start, end + 1):
         # ★★ 中止检查（章与章之间）：用户点「停止」后不要让下一章再开跑
         if _should_stop():
@@ -701,27 +715,13 @@ def ai_batch_chapters(page: Page,
         # ① 确保章节存在（★ 逐章边建边跑；auto_new=False 时不新建）
         if auto_new:
             if not ensure_chapter(page, no):
-                print(f"[batch] ✗ 第{no}章无法就位，跳过")
-                failed.append(no)
-                results.append({"no": no, "ok": False, "reason": "章节缺失",
-                                "seconds": time.time() - t_ch})
-                _emit(no=no, total=_total, index=index, phase="done",
-                      ok=False, words=0, elapsed=time.time() - t_ch,
-                      reason="章节缺失", done_count=len(results),
-                      ok_count=sum(1 for x in results if x["ok"]))
+                _skip_missing(f"[batch] ✗ 第{no}章无法就位，跳过", "章节缺失")
                 if stop_on_fail:
                     break
                 continue
         elif no not in chapter_numbers(page):
-            print(f"[batch] ✗ 第{no}章不存在且未开启自动新建，跳过")
-            failed.append(no)
-            results.append({"no": no, "ok": False,
-                            "reason": "章节缺失(未开自动新建)",
-                            "seconds": time.time() - t_ch})
-            _emit(no=no, total=_total, index=index, phase="done",
-                  ok=False, words=0, elapsed=time.time() - t_ch,
-                  reason="章节缺失(未开自动新建)", done_count=len(results),
-                  ok_count=sum(1 for x in results if x["ok"]))
+            _skip_missing(f"[batch] ✗ 第{no}章不存在且未开启自动新建，跳过",
+                          "章节缺失(未开自动新建)")
             if stop_on_fail:
                 break
             continue
@@ -772,22 +772,8 @@ def ai_batch_chapters(page: Page,
             print(f"[batch] ✗ 第{no}章异常：{e}")
             r = {"ok": False, "reason": f"异常 {e}"}
 
-        # ★ 统一走 ai_auto_chapter 的新契约：优先用 ok，回退到 review
-        r = r if isinstance(r, dict) else {"ok": bool(r)}
-        ok = bool(r.get("ok", r.get("review", False)))
-        # ★ 失败原因现在真的能拿到了（原来 r.get("reason") 恒为 None）
-        reason = r.get("reason") or ""
-        # ★★ 2026-10-05 修正：只在**成功**时才允许回退到 gen.reason。
-        #   失败时若回退到 gen.reason，会把上一章的「2028 字达标，已采纳」
-        #   显示成本章失败原因（用户实测日志里就是这个误导）。
-        if not reason and ok and r.get("gen"):
-            reason = (r["gen"] or {}).get("reason") or ""
-        # 失败但没拿到原因 → 给个明确的兜底，绝不显示"达标/已采纳"这种成功语气
-        if not ok and not reason:
-            _gr = ((r.get("gen") or {}).get("reason") or "")
-            reason = (_gr if ("失败" in _gr or "打不开" in _gr or "点不到" in _gr
-                              or "没有" in _gr or "超时" in _gr)
-                      else "续写/审稿阶段未成功（详见运行日志）")
+        # ★ 统一结果契约（ok / reason）见 _batch_chapter_outcome
+        ok, reason = _batch_chapter_outcome(r)
         secs = time.time() - t_ch
         # ★★ 区分「真的失败」和「被用户停止」：
         #   章内的长等待（等生成/等审稿）收到停止请求时会立刻退出并返回失败，
@@ -1029,3 +1015,29 @@ def _print_chapter_summary(result: dict, body_before: int) -> None:
     print(f"    正文     : {body_before} → {result['body']} 字")
     print(f"    审稿替换 : {'✓ 完成' if result['review'] else '✗ 失败'}")
     print("=" * 58)
+
+
+def _batch_chapter_outcome(r) -> tuple:
+    """把 `ai_auto_chapter` 的返回值统一成 (ok, reason)。
+
+    ★ 统一走新契约：优先用 ok，回退到 review。
+    ★ 失败原因现在真的能拿到了（原来 `r.get("reason")` 恒为 None）。
+    ★★ 2026-10-05 修正：只在**成功**时才允许回退到 gen.reason。
+      失败时若回退到 gen.reason，会把上一章的「2028 字达标，已采纳」
+      显示成本章失败原因（用户实测日志里就是这个误导）。
+    ★ 失败但没拿到原因 → 给个明确的兜底，绝不显示"达标/已采纳"这种成功语气。
+
+    「是否被用户中止」不在这里判断：那一步要接在 `secs = time.time()` **之后**
+    （保持原有求值顺序），所以留在调用处。
+    """
+    r = r if isinstance(r, dict) else {"ok": bool(r)}
+    ok = bool(r.get("ok", r.get("review", False)))
+    reason = r.get("reason") or ""
+    if not reason and ok and r.get("gen"):
+        reason = (r["gen"] or {}).get("reason") or ""
+    if not ok and not reason:
+        _gr = ((r.get("gen") or {}).get("reason") or "")
+        reason = (_gr if ("失败" in _gr or "打不开" in _gr or "点不到" in _gr
+                          or "没有" in _gr or "超时" in _gr)
+                  else "续写/审稿阶段未成功（详见运行日志）")
+    return ok, reason

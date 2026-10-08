@@ -331,8 +331,12 @@ src_auto = inspect.getsource(AI.ai_auto_chapter)
 src_batch = inspect.getsource(AI.ai_batch_chapters)
 check_true("result seeds ok=False", '"ok": False' in src_auto)
 check_true("result seeds reason", '"reason":' in src_auto)
-check_true("batch prefers r['ok']", 'r.get("ok"' in src_batch)
-check_true("batch reads reason", 'r.get("reason")' in src_batch)
+check_true("batch prefers r['ok']（契约在 _batch_chapter_outcome，循环调用它）",
+           'r.get("ok"' in S.module_source("src/ai.py")
+           and "_batch_chapter_outcome(" in src_batch)
+check_true("batch reads reason（同上）",
+           'r.get("reason")' in S.module_source("src/ai.py")
+           and "_batch_chapter_outcome(" in src_batch)
 
 # 统计所有 return 前是否都设了 reason（粗略但有效）
 import re as _re
