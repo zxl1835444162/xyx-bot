@@ -40,35 +40,63 @@ IGNORE = {
     "configure", "config",
 }
 
+# 「只看操作」模式（--ops）再排除这些：纯读取 / 纯解析 / 纯字符串处理 ——
+# 没有副作用。抽取共用 helper 时"多读一个输入框""多做一次解析"是无害的，
+# 但会让完整比对满是噪音。这一模式的真正门槛是：
+#   **对站点的操作序列必须一模一样**（点了什么、传了什么超时、调了哪个流程）。
+PURE = {
+    "get", "strip", "isdigit", "int", "float", "bool", "len", "str", "join",
+    "search", "match", "count", "split", "set", "copy", "lower", "upper",
+}
 
-def calls_of(src: str) -> dict:
-    """{函数名: [(被调用名, 常量参数...), ...]}，按源码位置排序。"""
-    tree = ast.parse(src)
-    out: dict[str, list] = {}
 
-    def visit_func(node):
-        found = []
-        for n in ast.walk(node):
-            if isinstance(n, ast.Call):
-                f = n.func
+def _own_calls(node) -> list:
+    """只取这个函数**自己语句**里的调用，顺序 = **实际求值顺序**（后序）。
+
+    · 不深入嵌套函数体：嵌套函数由它自己的条目负责并在调用点展开，
+      否则"把内层函数抽成模块级函数"这种重构会误报差异。
+    · 后序遍历（先参数、后调用本身）：`f(g())` 的真实顺序是 g → f。
+      曾经按源码 (行,列) 排序，结果"把 render_template 的参数提成一行变量"
+      这种等价改写被误判成顺序变了 —— 求值顺序才是对的判据。
+    """
+    found = []
+
+    def rec(n, root):
+        for ch in ast.iter_child_nodes(n):
+            if isinstance(ch, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)) and ch is not root:
+                continue
+            if isinstance(ch, ast.Call):
+                rec(ch, root)            # 先子后父 = 先求值参数
+                f = ch.func
                 if isinstance(f, ast.Name):
                     callee = f.id
                 elif isinstance(f, ast.Attribute):
                     callee = f.attr
                 else:
-                    continue
-                consts = []
-                for a in n.args:
-                    if isinstance(a, ast.Constant):
-                        consts.append(repr(a.value))
-                for kw in n.keywords:
-                    if isinstance(kw.value, ast.Constant):
-                        consts.append(f"{kw.arg}={kw.value.value!r}")
-                found.append((n.lineno, n.col_offset, callee, tuple(consts)))
-        # ★ 必须按**源码位置**排序：ast.walk 是广度优先，嵌套深度一变顺序就乱，
-        #   用它比对会把"提取重构"误判成"顺序改了"（踩过一次）
-        found.sort(key=lambda x: (x[0], x[1]))
-        out[node.name] = [(callee, consts) for _l, _c, callee, consts in found]
+                    callee = None
+                if callee:
+                    consts = []
+                    for a in ch.args:
+                        if isinstance(a, ast.Constant):
+                            consts.append(repr(a.value))
+                    for kw in ch.keywords:
+                        if isinstance(kw.value, ast.Constant):
+                            consts.append(f"{kw.arg}={kw.value.value!r}")
+                    found.append((callee, tuple(consts)))
+            else:
+                rec(ch, root)
+
+    rec(node, node)
+    return found
+
+
+def calls_of(src: str) -> dict:
+    """{函数名: [(被调用名, 常量参数...), ...]}（顺序 = 求值顺序）。"""
+    tree = ast.parse(src)
+    out: dict[str, list] = {}
+
+    def visit_func(node):
+        out[node.name] = _own_calls(node)
         for ch in node.body:
             if isinstance(ch, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 visit_func(ch)
@@ -83,7 +111,7 @@ def calls_of(src: str) -> dict:
     return out
 
 
-def flatten(name: str, table: dict, seen=None, depth=0) -> list:
+def flatten(name: str, table: dict, seen=None, depth=0, extra_ignore=()) -> list:
     """展开成"做完所有事"的线性序列（本地 helper 递归展开）。"""
     seen = seen or set()
     if name in seen or depth > 12:
@@ -91,11 +119,11 @@ def flatten(name: str, table: dict, seen=None, depth=0) -> list:
     seen = seen | {name}
     out = []
     for callee, consts in table.get(name, []):
-        if callee in IGNORE:
+        if callee in IGNORE or callee in extra_ignore:
             continue
         if callee in table:
             # 本地函数：只展开、不记名 —— 提取重构因此变成透明的
-            out.extend(flatten(callee, table, seen, depth + 1))
+            out.extend(flatten(callee, table, seen, depth + 1, extra_ignore))
             continue
         out.append(f"{callee}{consts if consts else ''}")
     return out
@@ -112,21 +140,26 @@ def new_src(rel: str) -> str:
 
 def main() -> int:
     cmd = sys.argv[1] if len(sys.argv) > 1 else "list"
+    ops_only = "--ops" in sys.argv or cmd == "ops"
     only = [a for a in sys.argv[2:] if not a.startswith("-")]
 
     if cmd == "list":
         for rel, names in TARGETS.items():
             print(f"{rel}: {', '.join(names)}")
+        print("\n模式：diff（完整比对） / diff --ops（只看对站点的操作，作为门槛）")
         return 0
 
+    extra = PURE if ops_only else ()
+    if ops_only:
+        print("模式：只看操作类调用（排除了纯读取/解析/日志）")
     bad = 0
     for rel, names in TARGETS.items():
         old_t, new_t = calls_of(old_src(rel)), calls_of(new_src(rel))
         for name in names:
             if only and name not in only:
                 continue
-            a = flatten(name, old_t)
-            b = flatten(name, new_t)
+            a = flatten(name, old_t, extra_ignore=extra)
+            b = flatten(name, new_t, extra_ignore=extra)
             if a == b:
                 print(f"  ✓ {name:<20} 调用序列一致（{len(a)} 步）")
                 continue

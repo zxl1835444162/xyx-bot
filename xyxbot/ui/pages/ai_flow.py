@@ -21,80 +21,176 @@ from ..defaults import (
 )
 
 
+def _int_or(entry, default: int) -> int:
+    """从输入框读整数，读不到（空/非数字）就用默认值。
+
+    原本这个函数在三个入口里各定义了一份，现在收成模块级一个。
+    """
+    text = entry.get().strip()
+    return int(text) if text.isdigit() else default
+
+
 class AiFlowMixin:
-    """AI 流程（界面侧）。"""
+    """AI 流程（界面侧）。
 
-    def _ai_go(self):
-        """一键：打开作品 → 用「指令模板」渲染出文本 → AI 续写。"""
-        import threading
+    ★ 2026-10-07 整理：四个入口（续写 / 审稿 / 一条龙 / 批量）原本各自把
+      "校验作品 → 渲染指令模板 → 读参数 → 起线程 → 打开作品 → 调后端" 写了一遍，
+      573 行里大半是重复。现在共用的部分抽成本类的私有步骤方法（见下方 _ai_* ），
+      每个入口只剩"这一步和别的入口哪里不一样"。
+    """
 
-        if self._project is None:
-            self.log("还没有分章，先选文件分章", "warn")
-            return
+    # -------------------------------------------------- 共用步骤
+
+    def _ai_book_ok(self):
+        """校验「作品名称」并解析 --index。返回 (book, 有没有指定第几本) 或 None。"""
         book = self._ai_book_entry.get().strip()
         if not book:
             self.log("请填写「作品名称」（站点上那本书的名字）", "warn")
-            return
-        # ★ 同名多本时指定第几本
+            return None
         _idx, ok = self._parse_book_index()
         if not ok:
-            return
+            return None
+        return book
 
-        # ★ 快捷选项（提示词）关键词
-        shortcut = self._ai_shortcut_entry.get().strip()
-        if shortcut:
-            self.log(f"快捷选项将按关键词定位：{shortcut}", "info")
+    def _ai_render_plot(self):
+        """把「指令模板」渲染成这次要投喂的剧情文本。返回 (plot, 用到的代号) 或 None。
 
-        # ★ 按字数自动采纳参数
-        auto_accept = bool(self._ai_auto_var.get())
-
-        def _int_or(entry, default):
-            t = entry.get().strip()
-            return int(t) if t.isdigit() else default
-
-        min_words = _int_or(self._ai_min_entry, DEFAULT_MIN_WORDS)
-        max_words = _int_or(self._ai_max_entry, DEFAULT_MAX_WORDS)
-        max_retry = _int_or(self._ai_retry_entry, DEFAULT_MAX_RETRY)
-        if auto_accept and min_words > max_words:
-            self.log(f"字数区间写反了（{min_words}~{max_words}），已自动交换", "warn")
-            min_words, max_words = max_words, min_words
-        if auto_accept:
-            self.log(f"自动采纳已开启：{min_words}~{max_words} 字，"
-                     f"最多重生成 {max_retry} 次", "info")
-
-        # ① 回写细纲 → 取指令模板
+        ★★ 根因修复（保留）：原来没传 `current=` → 模板里的 `#@`（以及
+          {{当前章}}/{{本章}}/#当前章）会**原样**送进站点，而 UI 文案一直在教用户
+          「#@ = 当前章」。现在按「续写到第几章」下拉解析当前章。
+        """
+        if self._project is None:
+            self.log("还没有分章，先选文件分章", "warn")
+            return None
         self._collect_notes()
         self._project.instruction = self._get_instruction()
         tpl = self._project.instruction
         if not tpl:
             self.log("「指令模板」是空的，先写点什么（比如 #1）", "warn")
-            return
-
-        # ② 校验代号
+            return None
         chk = self._project.check_template(tpl)
         if chk["unknown"]:
             self.log("✗ 指令里有不存在的代号："
                      + " ".join(f"#{n}" for n in chk["unknown"])
                      + f"（共 {len(self._project.chapters)} 章）", "err")
-            return
+            return None
         if chk["empty"]:
             self.log("⚠ 这些章还没填细纲，会用原文兜底："
                      + " ".join(f"#{n}" for n in chk["empty"]), "warn")
-
-        # ③ 渲染
-        # ★★ 根因修复：原来没传 `current=` → 模板里的 `#@`（以及 {{当前章}}/
-        #    {{本章}}/#当前章）会**原样**送进站点，而 UI 文案一直在教用户
-        #    「#@ = 当前章」。现在按「续写到第几章」下拉解析当前章。
         cur_no = self._resolve_current_chapter_no()
         if cur_no is not None and self._project.CUR_RE.search(tpl):
             self.log(f"[ai] 「当前章」占位符 → 第{cur_no}章", "info")
         plot = self._project.render_template(tpl, current=cur_no)
         if not plot.strip():
             self.log("指令模板渲染出来是空的，检查一下 #N 写对没", "err")
-            return
+            return None
         self._set_preview(plot, f"✓ 待发送（{len(plot)} 字）")
-
         used = " ".join(f"#{n}" for n in chk["used"]) or "（无代号）"
+        return plot, used
+
+    def _ai_gen_opts(self):
+        """续写参数（快捷选项 / 自动采纳 / 字数区间 / 重试次数）。
+
+        ★★ 修正（2026-10-04 用户报「2700 字竟然过了 2100-2300 的限制」）：
+           原实现把区间写死成 100~5000、重试硬编码 0，理由是「让字数限制宽一点，
+           避免重试」—— 两者叠加 = **字数限制完全失效**（任何字数都算达标）。
+           现在严格使用界面上的区间与重试次数。
+        """
+        shortcut = self._ai_shortcut_entry.get().strip()     # 读取顺序与原实现一致
+        auto_accept = bool(self._ai_auto_var.get())
+        min_words = _int_or(self._ai_min_entry, DEFAULT_MIN_WORDS)
+        max_words = _int_or(self._ai_max_entry, DEFAULT_MAX_WORDS)
+        max_retry = _int_or(self._ai_retry_entry, DEFAULT_MAX_RETRY)
+        if min_words > max_words:
+            if auto_accept:
+                self.log(f"字数区间写反了（{min_words}~{max_words}），已自动交换", "warn")
+            min_words, max_words = max_words, min_words
+        return {"shortcut": shortcut,
+                "auto_accept": auto_accept,
+                "min_words": min_words, "max_words": max_words,
+                "max_retry": max_retry}
+
+    def _ai_review_opts(self):
+        """审稿参数（模型 / 联想 / 要求 / 追加指令 / 先开章节 / 替换 / 超时）。
+
+        读取顺序与原实现保持一致（纯读界面，无副作用，但顺序变了会让
+        tools/dev/flow_equiv.py 的比对出现无意义差异）。
+        """
+        model = self._rv_model_entry.get().strip() or DEFAULT_REVIEW_MODEL
+        card = self._rv_card_entry.get().strip() or DEFAULT_REVIEW_CARD
+        assoc = self._rv_assoc_entry.get().strip() or DEFAULT_REVIEW_ASSOCIATE
+        req = self._rv_req_entry.get().strip()
+        # ★★ 追加指令（待审文本是自带章节正文的，这里再补一段提示词）
+        instruction = self._rv_instr_text.get("1.0", "end").strip()
+        # ★ 先打开章节
+        chapter = self._rv_chapter_entry.get().strip()
+        # ★ 审稿流程开关（放在 chapter 与 replace 之间，与原实现的读取顺序一致）
+        wait_done = bool(self._rv_wait_var.get())
+        replace = bool(self._rv_replace_var.get())
+        select_all = bool(self._rv_select_all_var.get())
+        tout = self._rv_timeout_entry.get().strip()
+        timeout = int(tout) if tout.isdigit() else DEFAULT_REVIEW_TIMEOUT
+        return {"model": model, "card": card, "assoc": assoc, "req": req,
+                "instruction": instruction, "chapter": chapter,
+                "wait_done": wait_done,
+                "replace": replace, "select_all": select_all,
+                "timeout": timeout}
+
+    def _ai_prepare_session(self):
+        """阶段零：没登录态就先做「打开网站 + 保存 cookie/缓存」。返回 (能否继续, 失败原因)。
+
+        ★ 只在**没有**登录态时做，已有则跳过（不打断用户节奏）。
+        """
+        from xyxbot import login as L
+
+        st = L.is_ready()
+        if st["ok"]:
+            self.after(0, self.log, f"已有登录态，跳过准备（{st['age']}）", "dim")
+            return True, ""
+        self.after(0, self.log, "尚未准备：先打开网站并保存登录态…", "warn")
+        pr = L.prepare_session(self._app, save=True, auto=True,
+                               wait_seconds=0, interactive=True)
+        if not pr["ok"]:
+            return False, f"准备未完成：{pr['message']}"
+        self.after(0, self.log, "✓ 准备就绪", "ok")
+        self.after(0, self._prepare_refresh)
+        return True, ""
+
+    def _ai_open_book(self, page, book):
+        """在浏览器里打开作品（worker 线程内调用）。失败返回 False。"""
+        from xyxbot import books as B
+
+        self.after(0, self.log, f"打开作品《{book}》…", "brand")
+        if not B.open_book(page, book, console_pick=False,
+                           index=self._ai_book_index, wait=3.0):
+            return False
+        self.after(0, self.log, "✓ 已进入作品编辑器", "ok")
+        return True
+
+    # -------------------------------------------------- 一键续写
+
+    def _ai_go(self):
+        """一键：打开作品 → 用「指令模板」渲染出文本 → AI 续写。"""
+        book = self._ai_book_ok()
+        if not book:
+            return
+
+        opts = self._ai_gen_opts()
+        shortcut = opts["shortcut"]
+        auto_accept = opts["auto_accept"]
+        min_words, max_words = opts["min_words"], opts["max_words"]
+        max_retry = opts["max_retry"]
+        if shortcut:
+            self.log(f"快捷选项将按关键词定位：{shortcut}", "info")
+        if auto_accept:
+            self.log(f"自动采纳已开启：{min_words}~{max_words} 字，"
+                     f"最多重生成 {max_retry} 次", "info")
+
+        rendered = self._ai_render_plot()
+        if not rendered:
+            return
+        plot, used = rendered
+
         self.log(f"一键续写：作品《{book}》 用 {used} 合成 {len(plot)} 字", "brand")
         self._save_ws(silent=True)      # ★ 记住这次配置
         self.status.set_status("AI 续写中…", "warn")
@@ -103,19 +199,15 @@ class AiFlowMixin:
 
         def worker():
             try:
-                from xyxbot import books as B
                 from xyxbot import ai as AI
                 page = self._ensure_page()   # 复用同一个浏览器页（线程绑定）
 
                 # ★ 必须先打开作品，否则停在首页，找不到「AI续写正文」按钮
-                self.after(0, self.log, f"打开作品《{book}》…", "brand")
-                if not B.open_book(page, book, console_pick=False,
-                                   index=self._ai_book_index, wait=3.0):
+                if not self._ai_open_book(page, book):
                     self.after(0, self._on_ai_fail,
                                f"打开作品「{book}」失败——"
                                f"确认这本书存在（同名多本请填「作品名称」时加 --index）")
                     return
-                self.after(0, self.log, "✓ 已进入作品编辑器", "ok")
 
                 ok = AI.ai_continue(page, plot=plot, model="细腻版",
                                     associate="正常", relate_count=10,
@@ -171,34 +263,19 @@ class AiFlowMixin:
             - 续写点「开始 AI 续写」；审稿点「生成」。
             - 承载不同：续写=居中弹窗；审稿=**右侧抽屉**。
         """
-        import threading
-
-        book = self._ai_book_entry.get().strip()
+        book = self._ai_book_ok()
         if not book:
-            self.log("请填写「作品名称」（站点上那本书的名字）", "warn")
-            return
-        _idx, ok = self._parse_book_index()
-        if not ok:
             return
 
         # 读参数
-        model = (self._rv_model_entry.get().strip()
-                 or DEFAULT_REVIEW_MODEL)
-        card = (self._rv_card_entry.get().strip()
-                or DEFAULT_REVIEW_CARD)
-        assoc = (self._rv_assoc_entry.get().strip()
-                 or DEFAULT_REVIEW_ASSOCIATE)
-        req = self._rv_req_entry.get().strip()
-        # ★★ 追加指令（待审文本是自带章节正文的，这里再补一段提示词）
-        instruction = self._rv_instr_text.get("1.0", "end").strip()
-        # ★ 先打开章节
-        chapter = self._rv_chapter_entry.get().strip()
+        rv = self._ai_review_opts()
+        model, card, assoc = rv["model"], rv["card"], rv["assoc"]
+        req, instruction = rv["req"], rv["instruction"]
+        chapter = rv["chapter"]
         # ★ 审稿流程开关
-        wait_done = bool(self._rv_wait_var.get())
-        do_replace = bool(self._rv_replace_var.get())
-        select_all = bool(self._rv_select_all_var.get())
-        tout = self._rv_timeout_entry.get().strip()
-        done_timeout = int(tout) if tout.isdigit() else DEFAULT_REVIEW_TIMEOUT
+        wait_done = rv["wait_done"]
+        do_replace, select_all = rv["replace"], rv["select_all"]
+        done_timeout = rv["timeout"]
         if do_replace and not wait_done:
             self.log("「替换 / 插入」需要先等生成完成，已自动勾上「等生成完成」",
                      "warn")
@@ -220,17 +297,13 @@ class AiFlowMixin:
 
         def worker():
             try:
-                from xyxbot import books as B
                 from xyxbot import ai as AI
                 page = self._ensure_page()   # 复用同一个浏览器页（线程绑定）
 
-                self.after(0, self.log, f"打开作品《{book}》…", "brand")
-                if not B.open_book(page, book, console_pick=False,
-                                   index=self._ai_book_index, wait=3.0):
+                if not self._ai_open_book(page, book):
                     self.after(0, self._on_review_done, False,
                                "打开作品失败——确认这本书存在")
                     return
-                self.after(0, self.log, "✓ 已进入作品编辑器", "ok")
 
                 ok = AI.ai_review(page,
                                   model=model,
@@ -288,69 +361,29 @@ class AiFlowMixin:
             （任何字数都算达标），与用户「2700 竟然过了 2100-2300」的
             报障直接冲突。现在改为**严格使用界面上设置的区间与重试次数**。
         """
-        import threading
-
-        book = self._ai_book_entry.get().strip()
+        book = self._ai_book_ok()
         if not book:
-            self.log("请填写「作品名称」（站点上那本书的名字）", "warn")
-            return
-        _idx, ok = self._parse_book_index()
-        if not ok:
             return
 
         # ---- ① 剧情：跟「一键续写」一样，来自指令模板渲染 ----
-        if self._project is None:
-            self.log("还没有分章，先选文件分章", "warn")
+        rendered = self._ai_render_plot()
+        if not rendered:
             return
-        self._collect_notes()
-        self._project.instruction = self._get_instruction()
-        tpl = self._project.instruction
-        if not tpl:
-            self.log("「指令模板」是空的，先写点什么（比如 #1）", "warn")
-            return
-        chk = self._project.check_template(tpl)
-        if chk["unknown"]:
-            self.log("✗ 指令里有不存在的代号："
-                     + " ".join(f"#{n}" for n in chk["unknown"]), "err")
-            return
-        # ★★ 同上：必须传 current，否则 `#@` 会原样送进站点
-        plot = self._project.render_template(
-            tpl, current=self._resolve_current_chapter_no())
-        self._set_preview(plot, f"✓ 待发送（{len(plot)} 字）")
+        plot, _used = rendered
 
-        # ---- ② 续写参数 ----
-        shortcut = self._ai_shortcut_entry.get().strip()
-
-        def _int_or(entry, default):
-            t = entry.get().strip()
-            return int(t) if t.isdigit() else default
-
-        # ★★ 修正（2026-10-04 用户报「2700 字竟然过了 2100-2300 的限制」）：
-        #    原实现把区间写死成 100~5000（`... , 100) or 100`），
-        #    重试次数更是硬编码 `max_retry=0`，理由写在注释里是
-        #    「让字数限制宽一点，避免重试」。
-        #    但这两条叠加 = **字数限制完全失效**：只生成一轮 + 兜底必采纳
-        #    ⇒ 任何字数都算"达标"。用户就是这样被 2700 字蒙过去的。
-        #    现在：**严格使用界面上的区间与重试次数**。
-        min_words = _int_or(self._ai_min_entry, DEFAULT_MIN_WORDS)
-        max_words = _int_or(self._ai_max_entry, DEFAULT_MAX_WORDS)
-        max_retry = _int_or(self._ai_retry_entry, DEFAULT_MAX_RETRY)
-        if min_words > max_words:
-            min_words, max_words = max_words, min_words
+        # ---- ② 续写参数 ----（读界面、含"字数区间写反自动交换"）
+        opts = self._ai_gen_opts()
+        shortcut = opts["shortcut"]
+        min_words, max_words = opts["min_words"], opts["max_words"]
+        max_retry = opts["max_retry"]
         gen_timeout = 300.0
 
         # ---- ③ 审稿参数 ----
-        rv_model = self._rv_model_entry.get().strip() or DEFAULT_REVIEW_MODEL
-        rv_card = self._rv_card_entry.get().strip() or DEFAULT_REVIEW_CARD
-        rv_assoc = (self._rv_assoc_entry.get().strip()
-                    or DEFAULT_REVIEW_ASSOCIATE)
-        rv_req = self._rv_req_entry.get().strip()
-        rv_instr = self._rv_instr_text.get("1.0", "end").strip()
-        rv_chapter = self._rv_chapter_entry.get().strip()
-        rv_replace = bool(self._rv_replace_var.get())
-        rv_select_all = bool(self._rv_select_all_var.get())
-        rv_tout = self._rv_timeout_entry.get().strip()
-        rv_timeout = int(rv_tout) if rv_tout.isdigit() else DEFAULT_REVIEW_TIMEOUT
+        rv = self._ai_review_opts()
+        rv_model, rv_card, rv_assoc = rv["model"], rv["card"], rv["assoc"]
+        rv_req, rv_instr = rv["req"], rv["instruction"]
+        rv_chapter = rv["chapter"]
+        rv_replace, rv_select_all, rv_timeout = rv["replace"], rv["select_all"], rv["timeout"]
         auto_close = bool(self._auto_both_close_var.get())
 
         self.log("★ 一条龙：续写 → 采纳 → 关弹窗 → 审稿 → 替换", "brand")
@@ -369,37 +402,20 @@ class AiFlowMixin:
 
         def worker():
             try:
-                from xyxbot import books as B
                 from xyxbot import ai as AI
-                from xyxbot import login as L
                 page = self._ensure_page()
 
                 # ★ 阶段零：流程准备（打开网站 → 保存 cookie/缓存）
                 #   没登录态才做；已有则跳过（不打断用户节奏）
-                st = L.is_ready()
-                if not st["ok"]:
-                    self.after(0, self.log,
-                               "尚未准备：先打开网站并保存登录态…", "warn")
-                    pr = L.prepare_session(
-                        self._app, save=True, auto=True,
-                        wait_seconds=0, interactive=True)
-                    if not pr["ok"]:
-                        self.after(0, self._on_both_done, None,
-                                   f"准备未完成：{pr['message']}")
-                        return
-                    self.after(0, self.log, "✓ 准备就绪", "ok")
-                    self.after(0, self._prepare_refresh)
-                else:
-                    self.after(0, self.log, f"已有登录态，跳过准备（{st['age']}）",
-                               "dim")
+                prepared, why = self._ai_prepare_session()
+                if not prepared:
+                    self.after(0, self._on_both_done, None, why)
+                    return
 
-                self.after(0, self.log, f"打开作品《{book}》…", "brand")
-                if not B.open_book(page, book, console_pick=False,
-                                   index=self._ai_book_index, wait=3.0):
+                if not self._ai_open_book(page, book):
                     self.after(0, self._on_both_done, None,
                                "打开作品失败——确认这本书存在")
                     return
-                self.after(0, self.log, "✓ 已进入作品编辑器", "ok")
 
                 # ★★ 先开章节（用户填了关键词就用，留空默认「第1章」）。
                 #    ★ 根因修复（2026-10-03）：之前这里 `rv_chapter` 留空就不开章，
@@ -474,25 +490,14 @@ class AiFlowMixin:
         → 每章：切章节 → 用「#@ = 当前章」渲染指令模板 → 一条龙。
           缺章自动新建（左栏没有「第N章」就点「新建章节」补）。
         """
-        import threading
-
-        book = self._ai_book_entry.get().strip()
-        if not book:
-            self.log("请填写「作品名称」（站点上那本书的名字）", "warn")
-            return
-
-        # ★★ 根因修复：批量路径原本**不解析**「第几本」，却直接使用
+        # ★★ 根因修复（保留）：批量路径原本**不解析**「第几本」，却直接使用
         #    `self._ai_book_index` → 用的是上一次单章/一条龙留下的**陈旧索引**，
-        #    可能打开错误的同名作品。现在与其它入口走同一个 helper。
-        _idx, ok = self._parse_book_index()
-        if not ok:
+        #    可能打开错误的同名作品。现在与其它入口走同一个 helper（内部即解析）。
+        book = self._ai_book_ok()
+        if not book:
             return
 
         # ---- 范围解析 ----
-        def _int_or(entry, default):
-            t = entry.get().strip()
-            return int(t) if t.isdigit() else default
-
         start = _int_or(self._batch_start_entry, 0)
         end = _int_or(self._batch_end_entry, 0)
         if start < 1 or end < 1:
@@ -532,32 +537,20 @@ class AiFlowMixin:
                      "（若是故意如此可忽略）", "warn")
         plot_for = lambda no: proj.render_for_batch(no, template=tpl)
 
-        # ---- 续写 / 审稿参数（复用一条龙的那套）----
-        shortcut = self._ai_shortcut_entry.get().strip()
-
+        # ---- 续写 / 审稿参数（与一条龙同一套读取）----
         # ★★ 修正（2026-10-04 用户报「2700 字竟然过了 2100-2300 的限制」）：
-        #    原实现把区间**写死**成 `_int_or(,_entry, 100) or 100` /
-        #    `... 5000) or 5000` —— 只有当界面上**留空**时才落到 100/5000 兜底，
-        #    但如果界面上填着 2100/2300，这里拿到的本来是 2100/2300 ...
-        #    真正的元凶在下面：`max_retry=0` 硬编码（见调用处），
-        #    导致**一轮定生死**，而旧的"尽力而为"分支会无脑采纳最后一轮。
-        #    现在：区间严格用**界面上的值**（默认走 DEFAULT_*），
-        #    重试次数也真正使用界面上的「最多重生成」。
-        min_words = _int_or(self._ai_min_entry, DEFAULT_MIN_WORDS)
-        max_words = _int_or(self._ai_max_entry, DEFAULT_MAX_WORDS)
-        max_retry = _int_or(self._ai_retry_entry, DEFAULT_MAX_RETRY)
-        if min_words > max_words:
-            min_words, max_words = max_words, min_words
-        rv_model = self._rv_model_entry.get().strip() or DEFAULT_REVIEW_MODEL
-        rv_card = self._rv_card_entry.get().strip() or DEFAULT_REVIEW_CARD
-        rv_assoc = (self._rv_assoc_entry.get().strip()
-                    or DEFAULT_REVIEW_ASSOCIATE)
-        rv_req = self._rv_req_entry.get().strip()
-        rv_instr = self._rv_instr_text.get("1.0", "end").strip()
-        rv_replace = bool(self._rv_replace_var.get())
-        rv_select_all = bool(self._rv_select_all_var.get())
-        rv_tout = self._rv_timeout_entry.get().strip()
-        rv_timeout = int(rv_tout) if rv_tout.isdigit() else DEFAULT_REVIEW_TIMEOUT
+        #    原实现把区间写死、并硬编码 `max_retry=0`（一轮定生死 + 旧"尽力而为"
+        #    分支无脑采纳最后一轮）⇒ 字数限制完全失效。现在区间与重试次数
+        #    都严格取界面上的值 —— 具体说明见 `_ai_gen_opts` 的文档串。
+        opts = self._ai_gen_opts()
+        shortcut = opts["shortcut"]
+        min_words, max_words = opts["min_words"], opts["max_words"]
+        max_retry = opts["max_retry"]
+        rv = self._ai_review_opts()
+        rv_model, rv_card, rv_assoc = rv["model"], rv["card"], rv["assoc"]
+        rv_req, rv_instr = rv["req"], rv["instruction"]
+        rv_replace, rv_select_all = rv["replace"], rv["select_all"]
+        rv_timeout = rv["timeout"]
         do_new = bool(self._batch_autonew_var.get())
         # ★ 2026-10-04 新增：某章失败就停（原来只有后端参数，界面没入口）
         try:
@@ -589,29 +582,17 @@ class AiFlowMixin:
 
         def worker():
             try:
-                from xyxbot import books as B
                 from xyxbot import ai as AI
-                from xyxbot import login as L
                 page = self._ensure_page()
 
                 # 阶段零：准备
-                st = L.is_ready()
-                if not st["ok"]:
-                    self.after(0, self.log, "尚未准备，先打开网站保存登录态…", "warn")
-                    pr = L.prepare_session(self._app, save=True, auto=True,
-                                           wait_seconds=0, interactive=True)
-                    if not pr["ok"]:
-                        self.after(0, self._on_batch_done, None,
-                                   f"准备未完成：{pr['message']}")
-                        return
-                    self.after(0, self.log, "✓ 准备就绪", "ok")
-                else:
-                    self.after(0, self.log, f"已有登录态，跳过准备（{st['age']}）", "dim")
+                prepared, why = self._ai_prepare_session()
+                if not prepared:
+                    self.after(0, self._on_batch_done, None, why)
+                    return
 
                 # 打开作品
-                self.after(0, self.log, f"打开作品《{book}》…", "brand")
-                if not B.open_book(page, book, console_pick=False,
-                                   index=self._ai_book_index, wait=3.0):
+                if not self._ai_open_book(page, book):
                     self.after(0, self._on_batch_done, None, "打开作品失败")
                     return
 
