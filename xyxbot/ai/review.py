@@ -534,28 +534,18 @@ def fill_review_text(page: Page, text: str = "",
 
 
 
-def pick_review_requirement(page: Page, keyword: str = "",
-                            tab: str = "快捷选项") -> bool:
-    """选「审稿要求」里的提示词（★ 默认用「快捷选项」tab）。
+def _switch_review_tab(page: Page, tab: str) -> None:
+    """① 切到「审稿要求」的某个 tab，并等下拉行渲染出来。
 
-    ★ 实测（2026-10-03）：
-      ① 「审稿要求」下面有三个 tab：快捷选项 / 自定义 / 更多
-         - 快捷选项：点开是**全屏提示词面板**（跟续写那边同一个 .prompt-row 列表）
-         - 自定义：自己写一段要求
-         - 更多：另一组预设
-      ② 必须**先点 tab**，那一行下拉才会出现/切换。
-      ③ ★ Naive UI 的样式怪癖：「快捷选项」和「更多」会**同时**带
-         `--checked`，所以绝不能按 class 判断选中态，只能**按文字点**。
-
-    Args:
-        keyword: 提示词关键词（如「强盛集团云霄拯救过稿计划」）
-        tab:     用哪个 tab，「快捷选项」/「自定义」/「更多」
+    ★ 必须**按文字点，不用 class**：Naive UI 里「快捷选项」和「更多」会**同时**
+      带 `--checked`，按 class 判断选中态一定出错。
+    ★ 实测：`{面板} .n-radio-button:has-text(...)` 常点击超时 —— tab 在抽屉内但
+      可能有遮挡/动画。改为 **JS 精确定位 + 原生点击**，失败再降级到
+      Playwright 短超时点击（+ JS/force 兜底，别白等 3 秒）。
+    ★ 效率改造：原来切 tab 后固定 sleep 0.5s。改成等**下拉行真的渲染出来**
+      （tab 切换生效的可见信号）：2 个 .n-base-selection 都出现即可。
+      找不到也无妨（后面有判空）。
     """
-    print(f"[ai] --- 审稿要求：{tab} → {keyword or '(不改)'} ---")
-
-    # ① 点 tab（★ 按文字点，不用 class：快捷选项/更多会同时带 --checked）
-    #    ★ 实测：`{面板} .n-radio-button:has-text(...)` 常点击超时，
-    #      因为 tab 在抽屉内但可能有遮挡/动画。改为 JS 精确定位 + 原生点击。
     tab_ok = False
     try:
         tab_ok = bool(page.evaluate("""(payload) => {
@@ -588,29 +578,31 @@ def pick_review_requirement(page: Page, keyword: str = "",
         except Exception as e:
             print(f"[ai] ⚠ 点 tab 失败：{str(e).splitlines()[0]}，沿用当前")
 
-    # ★ 效率改造：原来切 tab 后固定 sleep 0.5s。
-    #   改成等**下拉行真的渲染出来**（tab 切换生效的可见信号）：
-    #   2 个 .n-base-selection 都出现即可。找不到也无妨（下面有判空）。
     wait_until(lambda: page.locator(
         AI_SELECTORS["review_selects"][0]).count() >= 2,
         timeout=2.0, interval=0.05, desc="审稿要求行就绪")
 
-    if not keyword:
-        return True
 
-    # ② 点那一行下拉（★ 第 2 个 .n-base-selection）
+def _open_review_req_row(page: Page, keyword: str) -> str:
+    """② 点「审稿要求」那一行下拉（★ 第 2 个 .n-base-selection）。
+
+    返回：
+      "fail"   —— 找不到那一行（已截图），调用方直接返回 False
+      "done"   —— 那一行**已经是目标**了，不必重点，调用方直接返回 True
+      "opened" —— 已点开面板，调用方继续走到「选提示词」
+    """
     try:
         sels = page.locator(AI_SELECTORS["review_selects"][0])
         if sels.count() < 2:
             print("[ai] ✗ 找不到「审稿要求」那一行下拉")
             _shot(page, "ai_review_req_row_missing")
-            return False
+            return "fail"
         row = sels.nth(1)
         # 已经是目标了 → 跳过（回读断言，避免白点）
         cur = _text_of(row, timeout=400)
         if keyword and keyword in cur:
             print(f"[ai] 审稿要求已是「{cur[:40]}」，跳过")
-            return True
+            return "done"
         # ★ 短超时 + JS 降级（否则残留遮罩会让这里白等 4 秒，
         #   进而导致下面的面板等待/列表等待全部超时 —— 实测该步骤 29 秒）
         _safe_click(row, label="审稿要求下拉")
@@ -621,7 +613,41 @@ def pick_review_requirement(page: Page, keyword: str = "",
     except Exception as e:
         print(f"[ai] ✗ 点审稿要求失败：{str(e).splitlines()[0]}")
         _shot(page, "ai_review_req_open_fail")
+        return "fail"
+    return "opened"
+
+
+def pick_review_requirement(page: Page, keyword: str = "",
+                            tab: str = "快捷选项") -> bool:
+    """选「审稿要求」里的提示词（★ 默认用「快捷选项」tab）。
+
+    ★ 实测（2026-10-03）：
+      ① 「审稿要求」下面有三个 tab：快捷选项 / 自定义 / 更多
+         - 快捷选项：点开是**全屏提示词面板**（跟续写那边同一个 .prompt-row 列表）
+         - 自定义：自己写一段要求
+         - 更多：另一组预设
+      ② 必须**先点 tab**，那一行下拉才会出现/切换。
+      ③ ★ Naive UI 的样式怪癖：「快捷选项」和「更多」会**同时**带
+         `--checked`，所以绝不能按 class 判断选中态，只能**按文字点**。
+
+    Args:
+        keyword: 提示词关键词（如「强盛集团云霄拯救过稿计划」）
+        tab:     用哪个 tab，「快捷选项」/「自定义」/「更多」
+    """
+    print(f"[ai] --- 审稿要求：{tab} → {keyword or '(不改)'} ---")
+
+    # ① 点 tab（判据与坑见 _switch_review_tab 的文档串）
+    _switch_review_tab(page, tab)
+
+    if not keyword:
+        return True
+
+    # ② 点那一行下拉
+    _row = _open_review_req_row(page, keyword)
+    if _row == "fail":
         return False
+    if _row == "done":
+        return True
 
     # ③ 用文字定位选提示词（复用续写的逻辑；★ verify_row=False → 内部回读
     #    「审稿要求」那一行，并在没对上时延迟重试一次）
@@ -854,6 +880,71 @@ def wait_review_done(page: Page, timeout: float = 600.0,
 
 
 
+def _click_replace_button(page: Page) -> bool:
+    """① 点「替换 / 插入」：优先用「类名 + 位置」精确点（比文字更稳）。
+
+    ★ 不先 scroll_into_view_if_needed（它可能 15s 超时直接失败），直接 click；
+      短超时失败后依次 JS / force 降级（残留遮罩会拦原生点击，长超时只会白等，
+      详见 CLICK_FAST_TIMEOUT）。
+    """
+    clicked = False
+    for sel in AI_SELECTORS["btn_review_replace"]:
+        try:
+            loc = page.locator(sel)
+            n = loc.count()
+            if not n:
+                continue
+            btn = loc.last
+            try:
+                btn.click(timeout=CLICK_FAST_TIMEOUT)
+            except Exception:
+                try:
+                    btn.evaluate("e => e.click()")
+                except Exception:
+                    btn.click(timeout=CLICK_FAST_TIMEOUT, force=True)
+            clicked = True
+            print(f"[ai] ✓ 点击「替换 / 插入」（{sel[:52]}…）")
+            break
+        except Exception as e:
+            print(f"[ai] ⚠ 常规点击失败：{str(e).splitlines()[0]}")
+            continue
+    return clicked
+
+
+def _js_click_replace_button(page: Page) -> bool:
+    """② JS 降级：按类名找 success 型按钮直接 click()（文字匹配兜底）。"""
+    clicked = False
+    try:
+        clicked = bool(page.evaluate("""() => {
+          // 优先 footer 里的 success 型
+          const cards = document.querySelectorAll(
+              '.chapter-right-workspace .n-card.chapter-side-pane-c, '
+              + '.n-card.chapter-side-pane-card');
+          for (const c of cards) {
+            const footer = c.querySelector('.n-card__footer') || c;
+            const b = [...footer.querySelectorAll(
+                'button.n-button--success-type')]
+                .filter(x => x.offsetParent !== null);
+            if (b.length) {
+              b[b.length - 1].scrollIntoView({block:'center'});
+              b[b.length - 1].click();
+              return true;
+            }
+          }
+          // 兜底：文字匹配（去空格）
+          const all = [...document.querySelectorAll('button')]
+            .filter(b => b.offsetParent !== null
+                && (b.innerText||'').replace(/\\s/g,'').includes('替换'));
+          if (all.length) { all[all.length-1].click(); return true; }
+          return false;
+        }"""))
+        if clicked:
+            print("[ai] ✓ JS 降级点击「替换 / 插入」")
+    except Exception as e:
+        print(f"[ai] ⚠ JS 降级失败：{str(e).splitlines()[0]}")
+    return clicked
+
+
 def replace_review_result(page: Page, wait: float = 1.0) -> bool:
     """点「替换 / 插入」，把审稿结果**落到正文**。
 
@@ -870,62 +961,10 @@ def replace_review_result(page: Page, wait: float = 1.0) -> bool:
     """
     print("[ai] --- 点「替换 / 插入」（落盘到正文）---")
 
-    # ① 点击：优先用「类名 + 位置」精确点（比文字更稳）
-    clicked = False
-    for sel in AI_SELECTORS["btn_review_replace"]:
-        try:
-            loc = page.locator(sel)
-            n = loc.count()
-            if not n:
-                continue
-            btn = loc.last
-            # ★ 不先 scroll_into_view_if_needed（它可能 15s 超时直接失败），
-            #   直接 click；短超时失败后依次 JS / force 降级
-            #   （残留遮罩会拦原生点击，长超时只会白等，详见 CLICK_FAST_TIMEOUT）
-            try:
-                btn.click(timeout=CLICK_FAST_TIMEOUT)
-            except Exception:
-                try:
-                    btn.evaluate("e => e.click()")
-                except Exception:
-                    btn.click(timeout=CLICK_FAST_TIMEOUT, force=True)
-            clicked = True
-            print(f"[ai] ✓ 点击「替换 / 插入」（{sel[:52]}…）")
-            break
-        except Exception as e:
-            print(f"[ai] ⚠ 常规点击失败：{str(e).splitlines()[0]}")
-            continue
-
-    # ② JS 降级：按类名找 success 型按钮直接 click()
+    # ① 点击（类名+位置精确点 → 失败走 ② JS 降级）
+    clicked = _click_replace_button(page)
     if not clicked:
-        try:
-            clicked = bool(page.evaluate("""() => {
-              // 优先 footer 里的 success 型
-              const cards = document.querySelectorAll(
-                  '.chapter-right-workspace .n-card.chapter-side-pane-c, '
-                  + '.n-card.chapter-side-pane-card');
-              for (const c of cards) {
-                const footer = c.querySelector('.n-card__footer') || c;
-                const b = [...footer.querySelectorAll(
-                    'button.n-button--success-type')]
-                    .filter(x => x.offsetParent !== null);
-                if (b.length) {
-                  b[b.length - 1].scrollIntoView({block:'center'});
-                  b[b.length - 1].click();
-                  return true;
-                }
-              }
-              // 兜底：文字匹配（去空格）
-              const all = [...document.querySelectorAll('button')]
-                .filter(b => b.offsetParent !== null
-                    && (b.innerText||'').replace(/\\s/g,'').includes('替换'));
-              if (all.length) { all[all.length-1].click(); return true; }
-              return false;
-            }"""))
-            if clicked:
-                print("[ai] ✓ JS 降级点击「替换 / 插入」")
-        except Exception as e:
-            print(f"[ai] ⚠ JS 降级失败：{str(e).splitlines()[0]}")
+        clicked = _js_click_replace_button(page)
 
     if not clicked:
         print("[ai] ✗ 找不到「替换 / 插入」按钮")

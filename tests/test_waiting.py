@@ -246,7 +246,9 @@ for fn, needle in [
     ("replace_review_result", "wait_until"),
     ("fill_review_text", "_wait_review_text_settled"),
     ("_wait_review_text_settled", "wait_until"),
-    ("pick_review_requirement", "wait_until"),
+    ("pick_review_requirement", "_switch_review_tab"),
+    ("_switch_review_tab", "wait_until"),
+    ("_open_review_req_row", "wait_visible"),
     ("dismiss_dialogs", "wait_gone"),
 ]:
     src = inspect.getsource(getattr(AI, fn))
