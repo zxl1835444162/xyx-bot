@@ -528,7 +528,13 @@ KEPT = ["__init__", "_build", "show_page", "_page_header", "_ensure_app",
         "log", "_on_window_close", "_task_names",
         "_page_builders", "_page_labels"]
 for n in KEPT:
-    check_true(f"MainWindow 保留骨架 {n}", n in MainWindow.__dict__)
+    # ★ 2026-10-07：main_window 已拆成 5 个 Mixin（骨架搬到 WindowMixin/
+    #   ChromeMixin/NavMixin/RuntimeMixin），所以"保留骨架"按**整条 MRO** 认亲；
+    #   真正要守的是：这些骨架方法仍然属于主窗口这条链，**没有散落进页面 Mixin**。
+    on_chain = n in MainWindow.__dict__ or any(
+        n in b.__dict__ for b in MainWindow.__mro__[1:] if b is not object)
+    check_true(f"MainWindow 保留骨架 {n}", on_chain,
+               f"在页面 Mixin 里: {n in AiFlowMixin.__dict__}")
 
 # ==================================================== 6. 核心逻辑
 print("\n=== 7. 分章 / 指令模板 / 细纲 核心逻辑 ===")

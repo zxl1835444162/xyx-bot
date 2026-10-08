@@ -127,8 +127,8 @@ check("★ 只有 run_app 那一处无条件建 root", len(_unguarded), 1)
 check_true(f"唯一那处在 run_gui（{_unguarded}）",
            bool(_unguarded) and _unguarded[0].startswith("run_gui.py:"))
 check_true("主窗口是 Toplevel（不是各自建 Tk root）",
-           "tk.Toplevel)" in S.ui_file("main_window.py").read_text(
-               encoding="utf-8"))
+           # ★ 2026-10-07：main_window 已拆成包，用 module_source（模块或包都能读）
+           "tk.Toplevel)" in S.module_source("ui/main_window.py"))
 
 # ==================================================== ③ 看门狗与诊断
 print("\n=== ③ 卡死要能自己打出主线程栈（且**不落盘任何文件**）===")
